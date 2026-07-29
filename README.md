@@ -1,20 +1,12 @@
 # DriveFlow Runtime
 
-DriveFlow is a Linux C++20 learning and portfolio project for receiving, validating, distributing,
-recording, and replaying simulated vehicle sensor data. The repository is being built in small,
-reviewable issues; it is not yet the complete runtime described in the project plan.
+DriveFlow is a Linux C++20 runtime for receiving, validating, distributing, recording, and replaying
+simulated vehicle sensor data. It focuses on explicit binary protocols, Linux I/O, bounded
+concurrency, inter-process communication, deterministic replay, and measurable reliability.
 
-## Current scope: Issue #1
+## Documentation
 
-- CMake presets for Debug, Release, ASan/UBSan, and TSan.
-- A versioned 32-byte binary packet header with explicit big-endian encoding.
-- IMU, GNSS, and CameraMeta message type identifiers.
-- CRC-32 validation and deterministic errors for malformed packets.
-- GoogleTest unit coverage and a libFuzzer entry point.
-
-UDP, epoll, workers, shared memory, recording, and replay are intentionally deferred.
-
-The exact wire layout and validation rules are documented in [docs/protocol.md](docs/protocol.md).
+- [Wire protocol and validation rules](docs/protocol.md)
 
 ## Prerequisites
 
