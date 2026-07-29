@@ -1,0 +1,77 @@
+# Local learning material and project notes
+/tutorial/
+/01_DriveFlow_Runtime_PLAN.md
+
+# CMake and Ninja generated files
+/build/
+/cmake-build-*/
+/CMakeFiles/
+/CMakeCache.txt
+/cmake_install.cmake
+/CTestTestfile.cmake
+/Makefile
+/build.ninja
+/.ninja_deps
+/.ninja_log
+/Testing/
+/compile_commands.json
+
+# Compiler and linker outputs
+*.o
+*.obj
+*.lo
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+
+# Runtime-generated data and logs
+*.dflog
+*.log
+/recordings/
+/logs/
+/runtime-data/
+
+# Crash dumps, sanitizer, profiling, and coverage outputs
+core
+core.*
+vgcore.*
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+*.gcov
+/coverage/
+/lcov.info
+
+# Local caches and Python helper environments
+/.cache/
+/.ccache/
+__pycache__/
+*.py[cod]
+/.pytest_cache/
+/.venv/
+/venv/
+
+# Local secrets and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+/secrets/
+
+# Editor and operating-system files
+/.vscode/
+/.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
