@@ -50,8 +50,13 @@ endif()
 
 set(DRIVEFLOW_FORMAT_SOURCES
     include/driveflow/protocol/packet.hpp
+    include/driveflow/net/udp_socket.hpp
     src/protocol/packet.cpp
+    src/net/udp_socket.cpp
+    apps/udp_sender_main.cpp
+    apps/udp_receiver_main.cpp
     tests/unit/protocol_packet_test.cpp
+    tests/integration/udp_socket_test.cpp
     tests/fuzz/decode_packet_fuzz.cpp)
 
 find_program(DRIVEFLOW_CLANG_FORMAT_EXECUTABLE NAMES clang-format)
@@ -83,6 +88,29 @@ if(DRIVEFLOW_ENABLE_CLANG_TIDY)
                                                     "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
 endif()
 
+add_library(driveflow_net src/net/udp_socket.cpp)
+add_library(DriveFlow::Net ALIAS driveflow_net)
+target_include_directories(
+  driveflow_net
+  PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+         "$<INSTALL_INTERFACE:include>")
+target_link_libraries(driveflow_net PUBLIC driveflow_project_options)
+if(DRIVEFLOW_ENABLE_CLANG_TIDY)
+  set_property(TARGET driveflow_net PROPERTY CXX_CLANG_TIDY
+                                             "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
+endif()
+
+add_executable(driveflow_udp_sender apps/udp_sender_main.cpp)
+target_link_libraries(driveflow_udp_sender PRIVATE DriveFlow::Net DriveFlow::Protocol)
+add_executable(driveflow_udp_receiver apps/udp_receiver_main.cpp)
+target_link_libraries(driveflow_udp_receiver PRIVATE DriveFlow::Net DriveFlow::Protocol)
+if(DRIVEFLOW_ENABLE_CLANG_TIDY)
+  set_property(TARGET driveflow_udp_sender PROPERTY CXX_CLANG_TIDY
+                                                    "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
+  set_property(TARGET driveflow_udp_receiver PROPERTY CXX_CLANG_TIDY
+                                                      "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
+endif()
+
 if(DRIVEFLOW_BUILD_TESTS)
   find_package(GTest CONFIG QUIET)
   if(NOT GTest_FOUND)
@@ -97,9 +125,14 @@ if(DRIVEFLOW_BUILD_TESTS)
 
   add_executable(protocol_packet_test tests/unit/protocol_packet_test.cpp)
   target_link_libraries(protocol_packet_test PRIVATE DriveFlow::Protocol GTest::gtest_main)
+  add_executable(udp_socket_test tests/integration/udp_socket_test.cpp)
+  target_link_libraries(udp_socket_test PRIVATE DriveFlow::Net DriveFlow::Protocol
+                                                GTest::gtest_main)
   if(DRIVEFLOW_ENABLE_CLANG_TIDY)
     set_property(TARGET protocol_packet_test PROPERTY CXX_CLANG_TIDY
                                                        "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
+    set_property(TARGET udp_socket_test PROPERTY CXX_CLANG_TIDY
+                                                "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
   endif()
 
   if(DRIVEFLOW_TSAN_DISABLE_ASLR)
@@ -111,10 +144,15 @@ if(DRIVEFLOW_BUILD_TESTS)
       TARGET protocol_packet_test
       PROPERTY CROSSCOMPILING_EMULATOR
                "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
+    set_property(
+      TARGET udp_socket_test
+      PROPERTY CROSSCOMPILING_EMULATOR
+               "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
   endif()
 
   include(GoogleTest)
   gtest_discover_tests(protocol_packet_test DISCOVERY_MODE PRE_TEST)
+  gtest_discover_tests(udp_socket_test DISCOVERY_MODE PRE_TEST)
 endif()
 
 if(DRIVEFLOW_BUILD_FUZZERS)
