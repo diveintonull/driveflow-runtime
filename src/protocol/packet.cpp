@@ -1,10 +1,11 @@
 #include "driveflow/protocol/packet.hpp"
 
+#include "wire.hpp"
+
 #include <algorithm>
 #include <array>
 #include <limits>
 #include <stdexcept>
-#include <type_traits>
 
 namespace driveflow::protocol {
 namespace {
@@ -18,25 +19,6 @@ constexpr std::size_t kPayloadLengthOffset = 24U;
 constexpr std::size_t kCrcOffset = 28U;
 constexpr std::uint32_t kCrcInitialState = 0xffffffffU;
 constexpr std::uint32_t kCrcPolynomial = 0xedb88320U;
-
-template <typename UInt>
-void write_big_endian(std::span<std::uint8_t> output, std::size_t offset, UInt value) {
-  static_assert(std::is_unsigned_v<UInt>);
-  for (std::size_t index = 0; index < sizeof(UInt); ++index) {
-    const std::size_t shift = (sizeof(UInt) - index - 1U) * 8U;
-    output[offset + index] = static_cast<std::uint8_t>(value >> shift);
-  }
-}
-
-template <typename UInt>
-[[nodiscard]] UInt read_big_endian(std::span<const std::uint8_t> input, std::size_t offset) {
-  static_assert(std::is_unsigned_v<UInt>);
-  UInt value{};
-  for (std::size_t index = 0; index < sizeof(UInt); ++index) {
-    value = static_cast<UInt>((value << 8U) | input[offset + index]);
-  }
-  return value;
-}
 
 [[nodiscard]] bool is_known_message_type(std::uint16_t raw_type) noexcept {
   switch (static_cast<MessageType>(raw_type)) {
@@ -90,18 +72,20 @@ std::vector<std::uint8_t> encode_packet(MessageType message_type, std::uint64_t 
 
   std::vector<std::uint8_t> encoded(kPacketHeaderSize + payload.size(), 0U);
   const std::span<std::uint8_t> output(encoded);
-  write_big_endian(output, kMagicOffset, kPacketMagic);
-  write_big_endian(output, kVersionOffset, kProtocolVersion);
-  write_big_endian(output, kMessageTypeOffset, raw_type);
-  write_big_endian(output, kSequenceNumberOffset, sequence_number);
-  write_big_endian(output, kTimestampOffset, source_timestamp_ns);
-  write_big_endian(output, kPayloadLengthOffset, static_cast<std::uint32_t>(payload.size()));
+  wire::write_big_endian(output, kMagicOffset, kPacketMagic);
+  wire::write_big_endian(output, kVersionOffset, kProtocolVersion);
+  wire::write_big_endian(output, kMessageTypeOffset, raw_type);
+  wire::write_big_endian(output, kSequenceNumberOffset, sequence_number);
+  wire::write_big_endian(output, kTimestampOffset, source_timestamp_ns);
+  wire::write_big_endian(output, kPayloadLengthOffset,
+                         static_cast<std::uint32_t>(payload.size()));
   const auto payload_output = encoded.begin() + static_cast<std::ptrdiff_t>(kPacketHeaderSize);
   std::copy(payload.begin(), payload.end(), payload_output);
 
   const auto header_without_crc = std::span<const std::uint8_t>(encoded).first(kCrcOffset);
   const auto encoded_payload = std::span<const std::uint8_t>(encoded).subspan(kPacketHeaderSize);
-  write_big_endian(output, kCrcOffset, packet_crc(header_without_crc, encoded_payload));
+  wire::write_big_endian(output, kCrcOffset,
+                         packet_crc(header_without_crc, encoded_payload));
   return encoded;
 }
 
@@ -111,14 +95,16 @@ DecodeResult decode_packet(std::span<const std::uint8_t> bytes) {
   }
 
   PacketHeader header;
-  header.magic = read_big_endian<std::uint32_t>(bytes, kMagicOffset);
-  header.version = read_big_endian<std::uint16_t>(bytes, kVersionOffset);
-  const auto raw_type = read_big_endian<std::uint16_t>(bytes, kMessageTypeOffset);
+  header.magic = wire::read_big_endian<std::uint32_t>(bytes, kMagicOffset);
+  header.version = wire::read_big_endian<std::uint16_t>(bytes, kVersionOffset);
+  const auto raw_type = wire::read_big_endian<std::uint16_t>(bytes, kMessageTypeOffset);
   header.message_type = static_cast<MessageType>(raw_type);
-  header.sequence_number = read_big_endian<std::uint64_t>(bytes, kSequenceNumberOffset);
-  header.source_timestamp_ns = read_big_endian<std::uint64_t>(bytes, kTimestampOffset);
-  header.payload_length = read_big_endian<std::uint32_t>(bytes, kPayloadLengthOffset);
-  header.crc32 = read_big_endian<std::uint32_t>(bytes, kCrcOffset);
+  header.sequence_number =
+      wire::read_big_endian<std::uint64_t>(bytes, kSequenceNumberOffset);
+  header.source_timestamp_ns = wire::read_big_endian<std::uint64_t>(bytes, kTimestampOffset);
+  header.payload_length =
+      wire::read_big_endian<std::uint32_t>(bytes, kPayloadLengthOffset);
+  header.crc32 = wire::read_big_endian<std::uint32_t>(bytes, kCrcOffset);
 
   if (header.magic != kPacketMagic) {
     return failure(DecodeError::kInvalidMagic);

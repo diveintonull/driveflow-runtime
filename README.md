@@ -7,6 +7,7 @@ concurrency, inter-process communication, deterministic replay, and measurable r
 ## Documentation
 
 - [Wire protocol and validation rules](docs/protocol.md)
+- [Sensor payload schemas](docs/sensor-payloads.md)
 - [UDP transport and loopback demo](docs/udp.md)
 
 ## Prerequisites

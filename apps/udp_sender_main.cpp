@@ -1,7 +1,7 @@
 #include "driveflow/net/udp_socket.hpp"
 #include "driveflow/protocol/packet.hpp"
+#include "driveflow/protocol/sensor_payload.hpp"
 
-#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstdint>
@@ -22,7 +22,7 @@ namespace {
 }
 
 [[nodiscard]] std::uint64_t current_timestamp_ns() {
-  const auto elapsed = std::chrono::system_clock::now().time_since_epoch();
+  const auto elapsed = std::chrono::steady_clock::now().time_since_epoch();
   const auto nanoseconds = std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
   return static_cast<std::uint64_t>(nanoseconds);
 }
@@ -38,9 +38,13 @@ int main(int argc, char* argv[]) {
   try {
     const driveflow::net::Ipv4Endpoint destination{.address = argv[1],
                                                    .port = parse_port(argv[2])};
-    constexpr std::array<std::uint8_t, 9> payload{'D', 'r', 'i', 'v', 'e', 'F', 'l', 'o', 'w'};
+    const driveflow::protocol::SensorPayload sample{driveflow::protocol::ImuSample{
+        .linear_acceleration_mps2 = {.x = 0.0F, .y = 0.0F, .z = 9.81F},
+        .angular_velocity_rps = {.x = 0.01F, .y = -0.02F, .z = 0.03F},
+    }};
+    const auto payload = driveflow::protocol::encode_sensor_payload(sample);
     const auto packet = driveflow::protocol::encode_packet(
-        driveflow::protocol::MessageType::kImu, 1U, current_timestamp_ns(), payload);
+        driveflow::protocol::message_type(sample), 1U, current_timestamp_ns(), payload);
 
     auto socket = driveflow::net::UdpSocket::open();
     socket.send_to(packet, destination);

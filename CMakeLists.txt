@@ -50,12 +50,16 @@ endif()
 
 set(DRIVEFLOW_FORMAT_SOURCES
     include/driveflow/protocol/packet.hpp
+    include/driveflow/protocol/sensor_payload.hpp
     include/driveflow/net/udp_socket.hpp
     src/protocol/packet.cpp
+    src/protocol/sensor_payload.cpp
+    src/protocol/wire.hpp
     src/net/udp_socket.cpp
     apps/udp_sender_main.cpp
     apps/udp_receiver_main.cpp
     tests/unit/protocol_packet_test.cpp
+    tests/unit/sensor_payload_test.cpp
     tests/integration/udp_socket_test.cpp
     tests/fuzz/decode_packet_fuzz.cpp)
 
@@ -76,7 +80,9 @@ else()
   message(STATUS "clang-format not found; format targets are unavailable")
 endif()
 
-add_library(driveflow_protocol src/protocol/packet.cpp)
+add_library(driveflow_protocol
+            src/protocol/packet.cpp
+            src/protocol/sensor_payload.cpp)
 add_library(DriveFlow::Protocol ALIAS driveflow_protocol)
 target_include_directories(
   driveflow_protocol
@@ -125,11 +131,15 @@ if(DRIVEFLOW_BUILD_TESTS)
 
   add_executable(protocol_packet_test tests/unit/protocol_packet_test.cpp)
   target_link_libraries(protocol_packet_test PRIVATE DriveFlow::Protocol GTest::gtest_main)
+  add_executable(sensor_payload_test tests/unit/sensor_payload_test.cpp)
+  target_link_libraries(sensor_payload_test PRIVATE DriveFlow::Protocol GTest::gtest_main)
   add_executable(udp_socket_test tests/integration/udp_socket_test.cpp)
   target_link_libraries(udp_socket_test PRIVATE DriveFlow::Net DriveFlow::Protocol
                                                 GTest::gtest_main)
   if(DRIVEFLOW_ENABLE_CLANG_TIDY)
     set_property(TARGET protocol_packet_test PROPERTY CXX_CLANG_TIDY
+                                                       "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
+    set_property(TARGET sensor_payload_test PROPERTY CXX_CLANG_TIDY
                                                        "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
     set_property(TARGET udp_socket_test PROPERTY CXX_CLANG_TIDY
                                                 "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
@@ -145,6 +155,10 @@ if(DRIVEFLOW_BUILD_TESTS)
       PROPERTY CROSSCOMPILING_EMULATOR
                "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
     set_property(
+      TARGET sensor_payload_test
+      PROPERTY CROSSCOMPILING_EMULATOR
+               "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
+    set_property(
       TARGET udp_socket_test
       PROPERTY CROSSCOMPILING_EMULATOR
                "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
@@ -152,6 +166,7 @@ if(DRIVEFLOW_BUILD_TESTS)
 
   include(GoogleTest)
   gtest_discover_tests(protocol_packet_test DISCOVERY_MODE PRE_TEST)
+  gtest_discover_tests(sensor_payload_test DISCOVERY_MODE PRE_TEST)
   gtest_discover_tests(udp_socket_test DISCOVERY_MODE PRE_TEST)
 endif()
 

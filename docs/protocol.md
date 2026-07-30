@@ -1,13 +1,13 @@
 # DriveFlow wire protocol v1
 
-Issue #1 deliberately defines only the envelope. Sensor payload schemas remain opaque until their
-producer and consumer requirements are implemented together.
+The packet envelope and typed sensor payloads are serialized separately. IMU, GNSS, and CameraMeta
+payload layouts are defined in [Sensor payload schemas](sensor-payloads.md).
 
 ## Packet boundary
 
-A packet is one fixed-size header followed by exactly `payload_length` bytes. A later UDP transport
-will put one complete DriveFlow packet in one UDP datagram; DriveFlow will not perform fragmentation
-or reassembly.
+A packet is one fixed-size header followed by exactly `payload_length` bytes. The UDP transport puts
+one complete DriveFlow packet in one UDP datagram; DriveFlow does not perform fragmentation or
+reassembly.
 
 ## Header
 

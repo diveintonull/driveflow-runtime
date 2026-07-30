@@ -1,9 +1,10 @@
 #include "driveflow/net/udp_socket.hpp"
 #include "driveflow/protocol/packet.hpp"
+#include "driveflow/protocol/sensor_payload.hpp"
 
-#include <array>
 #include <cstdint>
 #include <stdexcept>
+#include <variant>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -17,7 +18,14 @@ TEST(UdpSocketIntegrationTest, TransfersEncodedPacketOverIpv4Loopback) {
   ASSERT_EQ(destination.address, "127.0.0.1");
   ASSERT_NE(destination.port, 0U);
 
-  constexpr std::array<std::uint8_t, 4> payload{1U, 2U, 3U, 4U};
+  const protocol::GnssFix fix{
+      .latitude_deg = 1.3521,
+      .longitude_deg = 103.8198,
+      .altitude_m = 15.75,
+      .horizontal_accuracy_m = 0.8F,
+      .vertical_accuracy_m = 1.2F,
+  };
+  const auto payload = protocol::encode_sensor_payload(protocol::SensorPayload{fix});
   const auto encoded = protocol::encode_packet(protocol::MessageType::kGnss, 42U, 123'456U,
                                                payload);
   auto sender = UdpSocket::open();
@@ -27,13 +35,17 @@ TEST(UdpSocketIntegrationTest, TransfersEncodedPacketOverIpv4Loopback) {
   EXPECT_EQ(datagram.source.address, "127.0.0.1");
   EXPECT_NE(datagram.source.port, 0U);
 
-  const auto decoded = protocol::decode_packet(datagram.bytes);
-  ASSERT_TRUE(decoded);
-  ASSERT_TRUE(decoded.packet.has_value());
-  EXPECT_EQ(decoded.packet->header.message_type, protocol::MessageType::kGnss);
-  EXPECT_EQ(decoded.packet->header.sequence_number, 42U);
-  EXPECT_EQ(decoded.packet->payload,
-            std::vector<std::uint8_t>(payload.begin(), payload.end()));
+  const auto decoded_packet = protocol::decode_packet(datagram.bytes);
+  ASSERT_TRUE(decoded_packet);
+  ASSERT_TRUE(decoded_packet.packet.has_value());
+  EXPECT_EQ(decoded_packet.packet->header.message_type, protocol::MessageType::kGnss);
+  EXPECT_EQ(decoded_packet.packet->header.sequence_number, 42U);
+
+  const auto decoded_payload = protocol::decode_sensor_payload(
+      decoded_packet.packet->header.message_type, decoded_packet.packet->payload);
+  ASSERT_TRUE(decoded_payload);
+  ASSERT_TRUE(decoded_payload.payload.has_value());
+  EXPECT_EQ(std::get<protocol::GnssFix>(*decoded_payload.payload), fix);
 }
 
 TEST(UdpSocketIntegrationTest, RejectsInvalidIpv4Address) {
