@@ -1,6 +1,7 @@
 #pragma once
 
 #include "driveflow/runtime/epoll_receiver.hpp"
+#include "driveflow/runtime/worker_pipeline.hpp"
 
 #include <chrono>
 #include <cstdint>
@@ -15,6 +16,7 @@ struct RuntimeConfig {
   EpollReceiverConfig receiver{
       .listen_endpoints = {{.address = "0.0.0.0", .port = 9'000U}},
   };
+  WorkerPipelineConfig pipeline;
   std::optional<std::uint64_t> packet_count;
   std::chrono::milliseconds poll_timeout{100};
 };

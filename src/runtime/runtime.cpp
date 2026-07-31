@@ -1,6 +1,7 @@
 #include "driveflow/runtime/runtime.hpp"
 
 #include <stdexcept>
+#include <utility>
 
 namespace driveflow::runtime {
 namespace {
@@ -11,6 +12,13 @@ namespace {
   }
   if (config.poll_timeout.count() <= 0) {
     throw std::invalid_argument("runtime poll timeout must be greater than zero");
+  }
+  if (config.pipeline.worker_count == 0U) {
+    throw std::invalid_argument("runtime worker count must be greater than zero");
+  }
+  if (config.pipeline.queue_capacity == 0U) {
+    throw std::invalid_argument(
+        "runtime worker queue capacity must be greater than zero");
   }
   return config;
 }
@@ -36,20 +44,22 @@ RuntimeSummary Runtime::run(StopPredicate stop_requested,
   RuntimeSummary summary;
   const auto limit_reached = [&] {
     return config_.packet_count.has_value() &&
-           summary.packets_delivered >= *config_.packet_count;
+           summary.packets_received >= *config_.packet_count;
   };
+  WorkerPipeline pipeline(config_.pipeline, std::move(packet_handler));
 
   while (!stop_requested() && !limit_reached()) {
     auto packets = receiver_.poll(config_.poll_timeout);
-    for (const auto& packet : packets) {
+    for (auto& packet : packets) {
       if (stop_requested() || limit_reached()) {
         break;
       }
-      packet_handler(packet);
-      ++summary.packets_delivered;
+      (void)pipeline.try_submit(std::move(packet));
+      ++summary.packets_received;
     }
   }
 
+  summary.pipeline_metrics = pipeline.stop();
   summary.receiver_metrics = receiver_.metrics();
   return summary;
 }

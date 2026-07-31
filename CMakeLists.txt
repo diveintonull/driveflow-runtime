@@ -8,6 +8,7 @@ project(
 
 include(CTest)
 include(FetchContent)
+find_package(Threads REQUIRED)
 
 option(DRIVEFLOW_BUILD_TESTS "Build DriveFlow tests" ON)
 option(DRIVEFLOW_BUILD_FUZZERS "Build libFuzzer targets" OFF)
@@ -56,6 +57,7 @@ set(DRIVEFLOW_FORMAT_SOURCES
     include/driveflow/runtime/epoll_receiver.hpp
     include/driveflow/runtime/runtime.hpp
     include/driveflow/runtime/runtime_config.hpp
+    include/driveflow/runtime/worker_pipeline.hpp
     src/protocol/packet.cpp
     src/protocol/sensor_payload.cpp
     src/protocol/wire.hpp
@@ -64,12 +66,14 @@ set(DRIVEFLOW_FORMAT_SOURCES
     src/runtime/epoll_receiver.cpp
     src/runtime/runtime.cpp
     src/runtime/runtime_config.cpp
+    src/runtime/worker_pipeline.cpp
     apps/runtime_main.cpp
     apps/sensor_simulator_main.cpp
     apps/udp_sender_main.cpp
     apps/udp_receiver_main.cpp
     tests/unit/protocol_packet_test.cpp
     tests/unit/runtime_config_test.cpp
+    tests/unit/worker_pipeline_test.cpp
     tests/unit/sensor_payload_test.cpp
     tests/unit/sensor_simulator_test.cpp
     tests/integration/epoll_receiver_test.cpp
@@ -138,7 +142,8 @@ add_library(
   driveflow_runtime
   src/runtime/epoll_receiver.cpp
   src/runtime/runtime.cpp
-  src/runtime/runtime_config.cpp)
+  src/runtime/runtime_config.cpp
+  src/runtime/worker_pipeline.cpp)
 add_library(DriveFlow::Runtime ALIAS driveflow_runtime)
 target_include_directories(
   driveflow_runtime
@@ -146,7 +151,8 @@ target_include_directories(
          "$<INSTALL_INTERFACE:include>")
 target_link_libraries(
   driveflow_runtime
-  PUBLIC DriveFlow::Net DriveFlow::Protocol driveflow_project_options)
+  PUBLIC DriveFlow::Net DriveFlow::Protocol driveflow_project_options
+  PRIVATE Threads::Threads)
 if(DRIVEFLOW_ENABLE_CLANG_TIDY)
   set_property(TARGET driveflow_runtime PROPERTY CXX_CLANG_TIDY
                                                  "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
@@ -204,6 +210,9 @@ if(DRIVEFLOW_BUILD_TESTS)
   add_executable(runtime_test tests/integration/runtime_test.cpp)
   target_link_libraries(
     runtime_test PRIVATE DriveFlow::Runtime GTest::gtest_main)
+  add_executable(worker_pipeline_test tests/unit/worker_pipeline_test.cpp)
+  target_link_libraries(
+    worker_pipeline_test PRIVATE DriveFlow::Runtime GTest::gtest_main)
   if(DRIVEFLOW_ENABLE_CLANG_TIDY)
     set_property(TARGET protocol_packet_test PROPERTY CXX_CLANG_TIDY
                                                        "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
@@ -219,6 +228,8 @@ if(DRIVEFLOW_BUILD_TESTS)
                                                      "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
     set_property(TARGET runtime_test PROPERTY CXX_CLANG_TIDY
                                               "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
+    set_property(TARGET worker_pipeline_test PROPERTY CXX_CLANG_TIDY
+                                                      "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
   endif()
 
   if(DRIVEFLOW_TSAN_DISABLE_ASLR)
@@ -254,6 +265,10 @@ if(DRIVEFLOW_BUILD_TESTS)
       TARGET runtime_test
       PROPERTY CROSSCOMPILING_EMULATOR
                "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
+    set_property(
+      TARGET worker_pipeline_test
+      PROPERTY CROSSCOMPILING_EMULATOR
+               "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
   endif()
 
   include(GoogleTest)
@@ -263,7 +278,10 @@ if(DRIVEFLOW_BUILD_TESTS)
   gtest_discover_tests(udp_socket_test DISCOVERY_MODE PRE_TEST)
   gtest_discover_tests(epoll_receiver_test DISCOVERY_MODE PRE_TEST)
   gtest_discover_tests(runtime_config_test DISCOVERY_MODE PRE_TEST)
-  gtest_discover_tests(runtime_test DISCOVERY_MODE PRE_TEST)
+  gtest_discover_tests(
+    runtime_test DISCOVERY_MODE PRE_TEST PROPERTIES TIMEOUT 5)
+  gtest_discover_tests(
+    worker_pipeline_test DISCOVERY_MODE PRE_TEST PROPERTIES TIMEOUT 5)
 endif()
 
 if(DRIVEFLOW_BUILD_FUZZERS)

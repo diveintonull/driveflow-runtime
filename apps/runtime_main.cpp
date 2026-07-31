@@ -59,11 +59,21 @@ int main(int argc, char* argv[]) {
         [](const driveflow::runtime::ReceivedPacket&) {});
 
     std::cout << "runtime stopped"
-              << " delivered=" << summary.packets_delivered
+              << " received=" << summary.packets_received
               << " datagrams=" << summary.receiver_metrics.datagrams_received
               << " accepted=" << summary.receiver_metrics.packets_accepted
               << " rejected=" << summary.receiver_metrics.packets_rejected
               << " epoll_wakeups=" << summary.receiver_metrics.epoll_wakeups
+              << " submitted=" << summary.pipeline_metrics.packets_submitted
+              << " processed=" << summary.pipeline_metrics.packets_processed
+              << " dropped_queue_full="
+              << summary.pipeline_metrics.packets_dropped_queue_full
+              << " rejected_stopped="
+              << summary.pipeline_metrics.packets_rejected_stopped
+              << " handler_failures="
+              << summary.pipeline_metrics.handler_failures
+              << " queue_high_watermark="
+              << summary.pipeline_metrics.queue_high_watermark
               << '\n';
   } catch (const std::exception& error) {
     std::cerr << "runtime failed: " << error.what() << '\n';

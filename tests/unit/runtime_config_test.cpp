@@ -11,12 +11,14 @@ namespace driveflow::runtime {
 namespace {
 
 TEST(RuntimeConfigTest, ParsesMultipleListenersAndRuntimeLimits) {
-  constexpr std::array<std::string_view, 10> arguments{
+  constexpr std::array<std::string_view, 14> arguments{
       "--listen",         "127.0.0.1:9001",
       "--listen",         "0.0.0.0:9002",
       "--count",          "12",
       "--poll-timeout-ms", "25",
       "--max-drain",      "7",
+      "--workers",        "3",
+      "--queue-capacity", "128",
   };
 
   const auto result = parse_runtime_config(arguments);
@@ -28,6 +30,8 @@ TEST(RuntimeConfigTest, ParsesMultipleListenersAndRuntimeLimits) {
   EXPECT_EQ(result.config->receiver.listen_endpoints[1],
             (net::Ipv4Endpoint{.address = "0.0.0.0", .port = 9'002U}));
   EXPECT_EQ(result.config->receiver.max_datagrams_per_listener_per_poll, 7U);
+  EXPECT_EQ(result.config->pipeline.worker_count, 3U);
+  EXPECT_EQ(result.config->pipeline.queue_capacity, 128U);
   EXPECT_EQ(result.config->packet_count, 12U);
   EXPECT_EQ(result.config->poll_timeout, std::chrono::milliseconds{25});
 }

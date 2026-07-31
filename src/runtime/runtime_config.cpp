@@ -92,7 +92,8 @@ ParseRuntimeConfigResult parse_runtime_config(
     if (option == "--count") {
       config.packet_count = *number;
     } else if (option == "--poll-timeout-ms") {
-      if (*number > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+      if (*number >
+          static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
         return failure("--poll-timeout-ms is too large");
       }
       config.poll_timeout =
@@ -104,6 +105,18 @@ ParseRuntimeConfigResult parse_runtime_config(
       }
       config.receiver.max_datagrams_per_listener_per_poll =
           static_cast<std::size_t>(*number);
+    } else if (option == "--workers") {
+      if (*number >
+          static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        return failure("--workers is too large");
+      }
+      config.pipeline.worker_count = static_cast<std::size_t>(*number);
+    } else if (option == "--queue-capacity") {
+      if (*number >
+          static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        return failure("--queue-capacity is too large");
+      }
+      config.pipeline.queue_capacity = static_cast<std::size_t>(*number);
     } else {
       return failure("unknown option: " + std::string(option));
     }
@@ -116,9 +129,11 @@ std::string_view runtime_usage() noexcept {
   return
       "usage: driveflow_runtime [options]\n"
       "  --listen <IPv4:port>       listen endpoint; may be repeated\n"
-      "  --count <packets>           stop after delivering this many packets\n"
+      "  --count <packets>           stop after receiving this many valid packets\n"
       "  --poll-timeout-ms <ms>      epoll wait timeout (default: 100)\n"
       "  --max-drain <datagrams>     per-listener drain limit (default: 64)\n"
+      "  --workers <threads>          worker thread count (default: 2)\n"
+      "  --queue-capacity <packets>  maximum waiting packets (default: 1024)\n"
       "default listener: 0.0.0.0:9000\n";
 }
 

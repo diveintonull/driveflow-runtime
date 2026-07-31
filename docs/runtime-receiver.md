@@ -12,7 +12,13 @@ Single-threaded epoll receiver
        |
        | packet header, length, version, and CRC validated
        v
-Runtime packet handler
+Bounded worker queue
+       |
+       v
+Worker threads
+       |
+       v
+PacketProcessor
 ```
 
 The DriveFlow runtime receiver is the long-running network entry point for
@@ -23,6 +29,11 @@ The receiver deliberately stops at the packet boundary. It validates the
 DriveFlow packet envelope and CRC, but it does not decode IMU, GNSS, or camera
 payloads. Payload decoding and downstream processing belong in the worker
 pipeline.
+
+The Runtime moves valid packets into a bounded queue so slow processing cannot
+block socket draining or grow memory without limit. See
+[bounded worker pipeline](worker-pipeline.md) for its overload, concurrency,
+shutdown, and metrics semantics.
 
 ## Build
 
@@ -101,13 +112,16 @@ traffic is separated by port.
 | Option | Meaning | Default |
 | --- | --- | --- |
 | `--listen <IPv4:port>` | UDP endpoint to bind; repeatable | `0.0.0.0:9000` |
-| `--count <packets>` | Stop after delivering this many valid packets | continuous |
+| `--count <packets>` | Stop after receiving this many valid packets | continuous |
 | `--poll-timeout-ms <ms>` | Maximum `epoll_wait` duration | 100 |
 | `--max-drain <datagrams>` | Maximum datagrams drained from one ready socket per poll | 64 |
-| `--help` | Print usage |  |
+| `--workers <threads>` | Worker thread count | 2 |
+| `--queue-capacity <packets>` | Maximum packets waiting for workers | 1024 |
+| `--help` | Print usage | none |
 
-Ports, counts, timeouts, and drain limits must be positive. Singleton options
-cannot be repeated. `--listen` is the only repeatable option.
+Ports, counts, timeouts, drain limits, worker counts, and queue capacities must
+be positive. Singleton options cannot be repeated. `--listen` is the only
+repeatable option.
 
 ## Packet acceptance
 
@@ -127,8 +141,8 @@ not terminate the process, and later datagrams on the same socket remain
 receivable.
 
 A packet can pass this layer even if its type-specific sensor payload is
-invalid. This is intentional: payload decoding will run in the worker
-pipeline, outside the I/O receive path.
+invalid. This is intentional: payload decoding can run from the
+`PacketProcessor` on a worker, outside the I/O receive path.
 
 ## Receiver metadata
 
@@ -151,13 +165,23 @@ The final CLI summary reports:
 
 | Metric | Meaning |
 | --- | --- |
-| `delivered` | Valid packets handed to the runtime packet handler |
+| `received` | Valid packets considered by Runtime for worker submission |
 | `datagrams` | UDP datagrams read from all sockets |
 | `accepted` | Datagrams that passed packet-level validation |
 | `rejected` | Datagrams rejected by packet-level validation |
 | `epoll_wakeups` | Poll calls that returned at least one ready descriptor |
+| `submitted` | Packets accepted by the worker queue |
+| `processed` | Packet processor calls that returned normally |
+| `dropped_queue_full` | Incoming packets rejected because the queue was full |
+| `rejected_stopped` | Submissions rejected after pipeline shutdown began |
+| `handler_failures` | Packet processor calls that threw |
+| `queue_high_watermark` | Largest observed number of waiting packets |
 
 A timeout is not counted as an `epoll` wakeup.
+
+After a graceful drain, `submitted` equals `processed + handler_failures`.
+`received` equals `submitted + dropped_queue_full` in the normal Runtime
+path.
 
 ## Why level-triggered epoll
 
@@ -181,7 +205,11 @@ again on a later poll.
 The executable installs handlers for `SIGINT` and `SIGTERM`.
 The handler only changes a `sig_atomic_t` stop flag. A signal interrupts
 the current `epoll_wait` call, after which the Runtime loop observes
-the flag, exits, and prints final metrics.
+the flag and stops polling sockets.
+
+Runtime then stops accepting pipeline submissions, drains every packet already
+accepted by the queue, joins the workers, and prints final metrics. A processor
+that never returns will therefore prevent graceful shutdown from completing.
 
 ## Library interface
 
@@ -192,29 +220,35 @@ driveflow::runtime::RuntimeConfig config;
 config.receiver.listen_endpoints = {
     {.address = "127.0.0.1", .port = 9000},
 };
+config.pipeline = {
+    .worker_count = 4,
+    .queue_capacity = 4096,
+};
 config.poll_timeout = std::chrono::milliseconds{100};
 
 driveflow::runtime::Runtime runtime(config);
 const auto summary = runtime.run(
     [] { return application_should_stop(); },
     [](const driveflow::runtime::ReceivedPacket& packet) {
-      enqueue_for_workers(packet);
+      process_packet(packet);
     });
 ```
 
-The handler is the intended connection point for the bounded worker queue in
-the next pipeline layer.
+Runtime invokes the handler from its workers, possibly concurrently and in a
+different completion order from packet arrival. The handler must synchronize
+any shared mutable state. `Runtime::run` returns only after accepted work has
+drained.
 
-## Current boundaries
+## Scope boundaries
 
-This receiver does not yet provide:
+The receiver and worker pipeline do not provide:
 
-- worker threads or a bounded queue;
 - type-specific sensor payload decoding;
 - sequence-gap, duplicate, or reordering detection;
 - source-health state;
+- per-source ordering partitions;
 - batching with `recvmmsg`;
-- recording, replay, or shared-memory distribution.
+- persistent recording, replay, or shared-memory distribution.
 
 Those capabilities can be added downstream without changing how sockets are
 registered and drained.
