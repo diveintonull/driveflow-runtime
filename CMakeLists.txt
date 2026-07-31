@@ -52,14 +52,18 @@ set(DRIVEFLOW_FORMAT_SOURCES
     include/driveflow/protocol/packet.hpp
     include/driveflow/protocol/sensor_payload.hpp
     include/driveflow/net/udp_socket.hpp
+    include/driveflow/simulator/sensor_simulator.hpp
     src/protocol/packet.cpp
     src/protocol/sensor_payload.cpp
     src/protocol/wire.hpp
     src/net/udp_socket.cpp
+    src/simulator/sensor_simulator.cpp
+    apps/sensor_simulator_main.cpp
     apps/udp_sender_main.cpp
     apps/udp_receiver_main.cpp
     tests/unit/protocol_packet_test.cpp
     tests/unit/sensor_payload_test.cpp
+    tests/unit/sensor_simulator_test.cpp
     tests/integration/udp_socket_test.cpp
     tests/fuzz/decode_packet_fuzz.cpp)
 
@@ -106,11 +110,30 @@ if(DRIVEFLOW_ENABLE_CLANG_TIDY)
                                              "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
 endif()
 
+add_library(driveflow_simulator src/simulator/sensor_simulator.cpp)
+add_library(DriveFlow::Simulator ALIAS driveflow_simulator)
+target_include_directories(
+  driveflow_simulator
+  PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+         "$<INSTALL_INTERFACE:include>")
+target_link_libraries(
+  driveflow_simulator
+  PUBLIC DriveFlow::Net DriveFlow::Protocol driveflow_project_options)
+if(DRIVEFLOW_ENABLE_CLANG_TIDY)
+  set_property(TARGET driveflow_simulator PROPERTY CXX_CLANG_TIDY
+                                                   "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
+endif()
+
+add_executable(driveflow_sensor_simulator apps/sensor_simulator_main.cpp)
+target_link_libraries(driveflow_sensor_simulator PRIVATE DriveFlow::Simulator)
+
 add_executable(driveflow_udp_sender apps/udp_sender_main.cpp)
 target_link_libraries(driveflow_udp_sender PRIVATE DriveFlow::Net DriveFlow::Protocol)
 add_executable(driveflow_udp_receiver apps/udp_receiver_main.cpp)
 target_link_libraries(driveflow_udp_receiver PRIVATE DriveFlow::Net DriveFlow::Protocol)
 if(DRIVEFLOW_ENABLE_CLANG_TIDY)
+  set_property(TARGET driveflow_sensor_simulator PROPERTY CXX_CLANG_TIDY
+                                                         "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
   set_property(TARGET driveflow_udp_sender PROPERTY CXX_CLANG_TIDY
                                                     "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
   set_property(TARGET driveflow_udp_receiver PROPERTY CXX_CLANG_TIDY
@@ -133,6 +156,8 @@ if(DRIVEFLOW_BUILD_TESTS)
   target_link_libraries(protocol_packet_test PRIVATE DriveFlow::Protocol GTest::gtest_main)
   add_executable(sensor_payload_test tests/unit/sensor_payload_test.cpp)
   target_link_libraries(sensor_payload_test PRIVATE DriveFlow::Protocol GTest::gtest_main)
+  add_executable(sensor_simulator_test tests/unit/sensor_simulator_test.cpp)
+  target_link_libraries(sensor_simulator_test PRIVATE DriveFlow::Simulator GTest::gtest_main)
   add_executable(udp_socket_test tests/integration/udp_socket_test.cpp)
   target_link_libraries(udp_socket_test PRIVATE DriveFlow::Net DriveFlow::Protocol
                                                 GTest::gtest_main)
@@ -141,6 +166,8 @@ if(DRIVEFLOW_BUILD_TESTS)
                                                        "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
     set_property(TARGET sensor_payload_test PROPERTY CXX_CLANG_TIDY
                                                        "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
+    set_property(TARGET sensor_simulator_test PROPERTY CXX_CLANG_TIDY
+                                                         "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
     set_property(TARGET udp_socket_test PROPERTY CXX_CLANG_TIDY
                                                 "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
   endif()
@@ -159,6 +186,10 @@ if(DRIVEFLOW_BUILD_TESTS)
       PROPERTY CROSSCOMPILING_EMULATOR
                "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
     set_property(
+      TARGET sensor_simulator_test
+      PROPERTY CROSSCOMPILING_EMULATOR
+               "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
+    set_property(
       TARGET udp_socket_test
       PROPERTY CROSSCOMPILING_EMULATOR
                "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
@@ -167,6 +198,7 @@ if(DRIVEFLOW_BUILD_TESTS)
   include(GoogleTest)
   gtest_discover_tests(protocol_packet_test DISCOVERY_MODE PRE_TEST)
   gtest_discover_tests(sensor_payload_test DISCOVERY_MODE PRE_TEST)
+  gtest_discover_tests(sensor_simulator_test DISCOVERY_MODE PRE_TEST)
   gtest_discover_tests(udp_socket_test DISCOVERY_MODE PRE_TEST)
 endif()
 
