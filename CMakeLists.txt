@@ -53,17 +53,27 @@ set(DRIVEFLOW_FORMAT_SOURCES
     include/driveflow/protocol/sensor_payload.hpp
     include/driveflow/net/udp_socket.hpp
     include/driveflow/simulator/sensor_simulator.hpp
+    include/driveflow/runtime/epoll_receiver.hpp
+    include/driveflow/runtime/runtime.hpp
+    include/driveflow/runtime/runtime_config.hpp
     src/protocol/packet.cpp
     src/protocol/sensor_payload.cpp
     src/protocol/wire.hpp
     src/net/udp_socket.cpp
     src/simulator/sensor_simulator.cpp
+    src/runtime/epoll_receiver.cpp
+    src/runtime/runtime.cpp
+    src/runtime/runtime_config.cpp
+    apps/runtime_main.cpp
     apps/sensor_simulator_main.cpp
     apps/udp_sender_main.cpp
     apps/udp_receiver_main.cpp
     tests/unit/protocol_packet_test.cpp
+    tests/unit/runtime_config_test.cpp
     tests/unit/sensor_payload_test.cpp
     tests/unit/sensor_simulator_test.cpp
+    tests/integration/epoll_receiver_test.cpp
+    tests/integration/runtime_test.cpp
     tests/integration/udp_socket_test.cpp
     tests/fuzz/decode_packet_fuzz.cpp)
 
@@ -124,6 +134,28 @@ if(DRIVEFLOW_ENABLE_CLANG_TIDY)
                                                    "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
 endif()
 
+add_library(
+  driveflow_runtime
+  src/runtime/epoll_receiver.cpp
+  src/runtime/runtime.cpp
+  src/runtime/runtime_config.cpp)
+add_library(DriveFlow::Runtime ALIAS driveflow_runtime)
+target_include_directories(
+  driveflow_runtime
+  PUBLIC "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>"
+         "$<INSTALL_INTERFACE:include>")
+target_link_libraries(
+  driveflow_runtime
+  PUBLIC DriveFlow::Net DriveFlow::Protocol driveflow_project_options)
+if(DRIVEFLOW_ENABLE_CLANG_TIDY)
+  set_property(TARGET driveflow_runtime PROPERTY CXX_CLANG_TIDY
+                                                 "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
+endif()
+
+add_executable(driveflow_runtime_app apps/runtime_main.cpp)
+set_target_properties(driveflow_runtime_app PROPERTIES OUTPUT_NAME driveflow_runtime)
+target_link_libraries(driveflow_runtime_app PRIVATE DriveFlow::Runtime)
+
 add_executable(driveflow_sensor_simulator apps/sensor_simulator_main.cpp)
 target_link_libraries(driveflow_sensor_simulator PRIVATE DriveFlow::Simulator)
 
@@ -132,6 +164,8 @@ target_link_libraries(driveflow_udp_sender PRIVATE DriveFlow::Net DriveFlow::Pro
 add_executable(driveflow_udp_receiver apps/udp_receiver_main.cpp)
 target_link_libraries(driveflow_udp_receiver PRIVATE DriveFlow::Net DriveFlow::Protocol)
 if(DRIVEFLOW_ENABLE_CLANG_TIDY)
+  set_property(TARGET driveflow_runtime_app PROPERTY CXX_CLANG_TIDY
+                                                     "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
   set_property(TARGET driveflow_sensor_simulator PROPERTY CXX_CLANG_TIDY
                                                          "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
   set_property(TARGET driveflow_udp_sender PROPERTY CXX_CLANG_TIDY
@@ -161,6 +195,15 @@ if(DRIVEFLOW_BUILD_TESTS)
   add_executable(udp_socket_test tests/integration/udp_socket_test.cpp)
   target_link_libraries(udp_socket_test PRIVATE DriveFlow::Net DriveFlow::Protocol
                                                 GTest::gtest_main)
+  add_executable(epoll_receiver_test tests/integration/epoll_receiver_test.cpp)
+  target_link_libraries(
+    epoll_receiver_test PRIVATE DriveFlow::Runtime GTest::gtest_main)
+  add_executable(runtime_config_test tests/unit/runtime_config_test.cpp)
+  target_link_libraries(
+    runtime_config_test PRIVATE DriveFlow::Runtime GTest::gtest_main)
+  add_executable(runtime_test tests/integration/runtime_test.cpp)
+  target_link_libraries(
+    runtime_test PRIVATE DriveFlow::Runtime GTest::gtest_main)
   if(DRIVEFLOW_ENABLE_CLANG_TIDY)
     set_property(TARGET protocol_packet_test PROPERTY CXX_CLANG_TIDY
                                                        "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
@@ -170,6 +213,12 @@ if(DRIVEFLOW_BUILD_TESTS)
                                                          "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
     set_property(TARGET udp_socket_test PROPERTY CXX_CLANG_TIDY
                                                 "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
+    set_property(TARGET epoll_receiver_test PROPERTY CXX_CLANG_TIDY
+                                                     "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
+    set_property(TARGET runtime_config_test PROPERTY CXX_CLANG_TIDY
+                                                     "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
+    set_property(TARGET runtime_test PROPERTY CXX_CLANG_TIDY
+                                              "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
   endif()
 
   if(DRIVEFLOW_TSAN_DISABLE_ASLR)
@@ -193,6 +242,18 @@ if(DRIVEFLOW_BUILD_TESTS)
       TARGET udp_socket_test
       PROPERTY CROSSCOMPILING_EMULATOR
                "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
+    set_property(
+      TARGET epoll_receiver_test
+      PROPERTY CROSSCOMPILING_EMULATOR
+               "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
+    set_property(
+      TARGET runtime_config_test
+      PROPERTY CROSSCOMPILING_EMULATOR
+               "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
+    set_property(
+      TARGET runtime_test
+      PROPERTY CROSSCOMPILING_EMULATOR
+               "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
   endif()
 
   include(GoogleTest)
@@ -200,6 +261,9 @@ if(DRIVEFLOW_BUILD_TESTS)
   gtest_discover_tests(sensor_payload_test DISCOVERY_MODE PRE_TEST)
   gtest_discover_tests(sensor_simulator_test DISCOVERY_MODE PRE_TEST)
   gtest_discover_tests(udp_socket_test DISCOVERY_MODE PRE_TEST)
+  gtest_discover_tests(epoll_receiver_test DISCOVERY_MODE PRE_TEST)
+  gtest_discover_tests(runtime_config_test DISCOVERY_MODE PRE_TEST)
+  gtest_discover_tests(runtime_test DISCOVERY_MODE PRE_TEST)
 endif()
 
 if(DRIVEFLOW_BUILD_FUZZERS)

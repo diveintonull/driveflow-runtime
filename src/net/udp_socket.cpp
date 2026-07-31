@@ -1,6 +1,7 @@
 #include "driveflow/net/udp_socket.hpp"
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -46,6 +47,43 @@ void close_socket(int file_descriptor) noexcept {
     (void)::close(file_descriptor);
   }
 }
+[[nodiscard]] std::optional<ReceivedDatagram> receive_datagram(
+    int file_descriptor, std::size_t maximum_size, bool return_would_block) {
+  if (maximum_size == 0U || maximum_size > kMaxUdpPayloadSize) {
+    throw std::invalid_argument("UDP receive size must be between 1 and 65507 bytes");
+  }
+
+  std::vector<std::uint8_t> bytes(maximum_size);
+  sockaddr_in source{};
+  iovec buffer{};
+  buffer.iov_base = bytes.data();
+  buffer.iov_len = bytes.size();
+
+  msghdr message{};
+  message.msg_name = &source;
+  message.msg_namelen = sizeof(source);
+  message.msg_iov = &buffer;
+  message.msg_iovlen = 1U;
+
+  const ssize_t received = ::recvmsg(file_descriptor, &message, 0);
+  if (received < 0) {
+    if (return_would_block && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+      return std::nullopt;
+    }
+    throw_system_error("recvmsg");
+  }
+  if ((message.msg_flags & MSG_TRUNC) != 0 ||
+      static_cast<std::size_t>(received) > maximum_size) {
+    throw std::length_error("received UDP datagram exceeds the configured buffer");
+  }
+
+  bytes.resize(static_cast<std::size_t>(received));
+  return ReceivedDatagram{
+      .bytes = std::move(bytes),
+      .source = from_sockaddr(source),
+  };
+}
+
 
 }  // namespace
 
@@ -82,6 +120,16 @@ UdpSocket UdpSocket::bind_to(const Ipv4Endpoint& local_endpoint) {
   return socket;
 }
 
+void UdpSocket::set_non_blocking() const {
+  const int flags = ::fcntl(file_descriptor_, F_GETFL);
+  if (flags < 0) {
+    throw_system_error("fcntl(F_GETFL)");
+  }
+  if (::fcntl(file_descriptor_, F_SETFL, flags | O_NONBLOCK) < 0) {
+    throw_system_error("fcntl(F_SETFL)");
+  }
+}
+
 void UdpSocket::send_to(std::span<const std::uint8_t> bytes,
                         const Ipv4Endpoint& destination) const {
   if (bytes.size() > kMaxUdpPayloadSize) {
@@ -100,33 +148,13 @@ void UdpSocket::send_to(std::span<const std::uint8_t> bytes,
 }
 
 ReceivedDatagram UdpSocket::receive(std::size_t maximum_size) const {
-  if (maximum_size == 0U || maximum_size > kMaxUdpPayloadSize) {
-    throw std::invalid_argument("UDP receive size must be between 1 and 65507 bytes");
-  }
+  auto datagram = receive_datagram(file_descriptor_, maximum_size, false);
+  return std::move(*datagram);
+}
 
-  std::vector<std::uint8_t> bytes(maximum_size);
-  sockaddr_in source{};
-  iovec buffer{};
-  buffer.iov_base = bytes.data();
-  buffer.iov_len = bytes.size();
-
-  msghdr message{};
-  message.msg_name = &source;
-  message.msg_namelen = sizeof(source);
-  message.msg_iov = &buffer;
-  message.msg_iovlen = 1U;
-
-  const ssize_t received = ::recvmsg(file_descriptor_, &message, 0);
-  if (received < 0) {
-    throw_system_error("recvmsg");
-  }
-  if ((message.msg_flags & MSG_TRUNC) != 0 ||
-      static_cast<std::size_t>(received) > maximum_size) {
-    throw std::length_error("received UDP datagram exceeds the configured buffer");
-  }
-
-  bytes.resize(static_cast<std::size_t>(received));
-  return {.bytes = std::move(bytes), .source = from_sockaddr(source)};
+std::optional<ReceivedDatagram> UdpSocket::try_receive(
+    std::size_t maximum_size) const {
+  return receive_datagram(file_descriptor_, maximum_size, true);
 }
 
 Ipv4Endpoint UdpSocket::local_endpoint() const {
@@ -137,5 +165,7 @@ Ipv4Endpoint UdpSocket::local_endpoint() const {
   }
   return from_sockaddr(address);
 }
+
+int UdpSocket::native_handle() const noexcept { return file_descriptor_; }
 
 }  // namespace driveflow::net

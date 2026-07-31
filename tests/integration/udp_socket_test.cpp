@@ -70,5 +70,12 @@ TEST(UdpSocketIntegrationTest, ReportsDatagramTruncation) {
   EXPECT_THROW((void)receiver.receive(4U), std::length_error);
 }
 
+TEST(UdpSocketIntegrationTest, NonBlockingReceiveReportsNoData) {
+  auto receiver = UdpSocket::bind_to({.address = "127.0.0.1", .port = 0U});
+  receiver.set_non_blocking();
+
+  EXPECT_FALSE(receiver.try_receive().has_value());
+}
+
 }  // namespace
 }  // namespace driveflow::net

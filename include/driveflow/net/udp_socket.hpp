@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -36,9 +37,13 @@ class UdpSocket {
 
   void send_to(std::span<const std::uint8_t> bytes,
                const Ipv4Endpoint& destination) const;
+  void set_non_blocking() const;
   [[nodiscard]] ReceivedDatagram receive(
       std::size_t maximum_size = kMaxUdpPayloadSize) const;
+  [[nodiscard]] std::optional<ReceivedDatagram> try_receive(
+      std::size_t maximum_size = kMaxUdpPayloadSize) const;
   [[nodiscard]] Ipv4Endpoint local_endpoint() const;
+  [[nodiscard]] int native_handle() const noexcept;
 
  private:
   explicit UdpSocket(int file_descriptor) noexcept;
