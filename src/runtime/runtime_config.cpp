@@ -105,6 +105,12 @@ ParseRuntimeConfigResult parse_runtime_config(
       }
       config.receiver.max_datagrams_per_listener_per_poll =
           static_cast<std::size_t>(*number);
+    } else if (option == "--max-sources") {
+      if (*number >
+          static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
+        return failure("--max-sources is too large");
+      }
+      config.max_sensor_sources = static_cast<std::size_t>(*number);
     } else if (option == "--workers") {
       if (*number >
           static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
@@ -132,6 +138,7 @@ std::string_view runtime_usage() noexcept {
       "  --count <packets>           stop after receiving this many valid packets\n"
       "  --poll-timeout-ms <ms>      epoll wait timeout (default: 100)\n"
       "  --max-drain <datagrams>     per-listener drain limit (default: 64)\n"
+      "  --max-sources <sources>     tracked sensor source limit (default: 256)\n"
       "  --workers <threads>          worker thread count (default: 2)\n"
       "  --queue-capacity <packets>  maximum waiting packets (default: 1024)\n"
       "default listener: 0.0.0.0:9000\n";

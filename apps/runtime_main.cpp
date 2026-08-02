@@ -64,6 +64,24 @@ int main(int argc, char* argv[]) {
               << " accepted=" << summary.receiver_metrics.packets_accepted
               << " rejected=" << summary.receiver_metrics.packets_rejected
               << " epoll_wakeups=" << summary.receiver_metrics.epoll_wakeups
+              << " streams_observed="
+              << summary.stream_metrics.streams_observed
+              << " packets_observed="
+              << summary.stream_metrics.packets_observed
+              << " first_observations="
+              << summary.stream_metrics.first_observations
+              << " in_order_observations="
+              << summary.stream_metrics.in_order_observations
+              << " gap_observations="
+              << summary.stream_metrics.gap_observations
+              << " duplicate_observations="
+              << summary.stream_metrics.duplicate_observations
+              << " reordered_observations="
+              << summary.stream_metrics.reordered_observations
+              << " untracked_observations="
+              << summary.stream_metrics.untracked_observations
+              << " missing_samples_inferred="
+              << summary.stream_metrics.missing_samples_inferred
               << " submitted=" << summary.pipeline_metrics.packets_submitted
               << " processed=" << summary.pipeline_metrics.packets_processed
               << " dropped_queue_full="

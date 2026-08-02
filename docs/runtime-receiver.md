@@ -12,6 +12,10 @@ Single-threaded epoll receiver
        |
        | packet header, length, version, and CRC validated
        v
+SensorStreamTracker
+       |
+       | source identified and sequence classified in receive order
+       v
 Bounded worker queue
        |
        v
@@ -33,6 +37,10 @@ The receiver deliberately stops at the packet boundary. It validates the
 DriveFlow packet envelope and CRC, but it does not decode IMU, GNSS, or camera
 payloads. `SensorSampleProcessor` performs payload decoding on worker threads,
 outside the latency-sensitive I/O receive path.
+
+Runtime classifies source sequence numbers on the same I/O thread before
+parallel dispatch. See [sensor stream tracking](sensor-stream-tracking.md) for
+source identity, wrap-around, bounded history, and metric semantics.
 
 The Runtime moves valid packets into a bounded queue so slow processing cannot
 block socket draining or grow memory without limit. See
@@ -111,6 +119,24 @@ Each accepted packet records both:
 The pair is useful when several sensor sources share a message type or when
 traffic is separated by port.
 
+## Sensor Source identity
+
+Protocol v1 has no explicit source ID. For one Runtime run, source tracking uses
+this identity:
+
+```text
+(remote endpoint, local listener, message type)
+```
+
+This separates different senders, different configured Runtime inputs, and
+independently sequenced sensor types sent from one socket. It is not a durable
+hardware or restart identity.
+
+The source table is bounded. `--max-sources` sets the number of admitted source
+states. A packet from a new source after the table is full is counted as
+untracked but continues into the worker pipeline; packets from already admitted
+sources continue to be classified.
+
 ## Command-line options
 
 | Option | Meaning | Default |
@@ -119,12 +145,13 @@ traffic is separated by port.
 | `--count <packets>` | Stop after receiving this many valid packets | continuous |
 | `--poll-timeout-ms <ms>` | Maximum `epoll_wait` duration | 100 |
 | `--max-drain <datagrams>` | Maximum datagrams drained from one ready socket per poll | 64 |
+| `--max-sources <sources>` | Maximum Sensor Sources retained by sequence tracking | 256 |
 | `--workers <threads>` | Worker thread count | 2 |
 | `--queue-capacity <packets>` | Maximum packets waiting for workers | 1024 |
 | `--help` | Print usage | none |
 
-Ports, counts, timeouts, drain limits, worker counts, and queue capacities must
-be positive. Singleton options cannot be repeated. `--listen` is the only
+Ports, counts, timeouts, drain limits, source limits, worker counts, and queue
+capacities must be positive. Singleton options cannot be repeated. `--listen` is the only
 repeatable option.
 
 ## Packet acceptance
@@ -175,6 +202,15 @@ The final CLI summary reports:
 | `accepted` | Datagrams that passed packet-level validation |
 | `rejected` | Datagrams rejected by packet-level validation |
 | `epoll_wakeups` | Poll calls that returned at least one ready descriptor |
+| `streams_observed` | Sensor Sources admitted into the bounded tracker |
+| `packets_observed` | Valid packet envelopes classified by the tracker |
+| `first_observations` | First packet seen for admitted sources |
+| `in_order_observations` | Exact next sequence numbers |
+| `gap_observations` | Forward sequence jumps larger than one |
+| `duplicate_observations` | Sequence numbers found in recent history |
+| `reordered_observations` | Previously unseen older sequence numbers |
+| `untracked_observations` | Packets from new sources after tracker capacity was full |
+| `missing_samples_inferred` | Sequence numbers skipped when gaps were first observed |
 | `submitted` | Packets accepted by the worker queue |
 | `processed` | Packet processor calls that returned normally |
 | `dropped_queue_full` | Incoming packets rejected because the queue was full |
@@ -193,6 +229,18 @@ A timeout is not counted as an `epoll` wakeup.
 After a graceful drain, `submitted` equals `processed + handler_failures`.
 `received` equals `submitted + dropped_queue_full` in the normal Runtime
 path.
+
+Stable stream metrics satisfy:
+
+```text
+packets_observed =
+    first_observations
+  + in_order_observations
+  + gap_observations
+  + duplicate_observations
+  + reordered_observations
+  + untracked_observations
+```
 
 Stable sample metrics also satisfy:
 
@@ -242,6 +290,7 @@ config.pipeline = {
     .worker_count = 4,
     .queue_capacity = 4096,
 };
+config.max_sensor_sources = 256;
 config.poll_timeout = std::chrono::milliseconds{100};
 
 driveflow::runtime::Runtime runtime(config);
@@ -264,8 +313,9 @@ concurrency, failure, and metric semantics.
 The Runtime processing path does not provide:
 
 - per-source rate or latency aggregation;
-- sequence-gap, duplicate, or reordering detection;
 - source-health state;
+- durable source or source-session identity;
+- automatic source expiration or tracker state eviction;
 - per-source ordering partitions;
 - batching with `recvmmsg`;
 - persistent recording, replay, or shared-memory distribution.

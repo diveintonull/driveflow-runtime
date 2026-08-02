@@ -190,6 +190,9 @@ yet been dropped.
 receive valid packet
         |
         v
+classify source sequence on I/O thread
+        |
+        v
 increment Runtime packets_received
         |
         v
@@ -204,6 +207,12 @@ When the stop predicate becomes true or `--count` is reached, Runtime stops
 polling sockets and calls `WorkerPipeline::stop()`. `Runtime::run` returns only
 after accepted work has drained.
 
+Source sequence tracking happens before `try_submit`. It therefore preserves
+receive order and records a valid packet even if the bounded queue later drops
+that packet. Running the tracker inside workers would confuse worker scheduling
+with network reordering. See
+[sensor stream tracking](sensor-stream-tracking.md).
+
 In the normal Runtime path, the pipeline's `PacketProcessor` is an internal
 adapter that calls `SensorSampleProcessor::process`. Type-specific decoding
 therefore stays off the I/O thread. An invalid typed payload returns normally
@@ -214,11 +223,14 @@ rejected because the worker queue was full or later rejected by typed payload
 validation. This makes a bounded experiment terminate after the requested
 amount of network input even under overload.
 
-The final executable summary includes receiver, pipeline, and sample metrics:
+The final executable summary includes receiver, stream, pipeline, and sample
+metrics:
 
 ```text
 runtime stopped received=10 datagrams=10 accepted=10 rejected=0 \
-epoll_wakeups=4 submitted=10 processed=10 dropped_queue_full=0 \
+epoll_wakeups=4 streams_observed=1 packets_observed=10 \
+first_observations=1 in_order_observations=9 gap_observations=0 \
+submitted=10 processed=10 dropped_queue_full=0 \
 rejected_stopped=0 handler_failures=0 queue_high_watermark=3 \
 packets_examined=10 samples_decoded=10 payloads_rejected=0
 ```

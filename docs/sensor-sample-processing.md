@@ -183,6 +183,10 @@ EpollReceiver
     |
     | ReceivedPacket
     v
+SensorStreamTracker
+    |
+    | receive-order sequence observation
+    v
 WorkerPipeline
     |
     | worker thread
@@ -197,6 +201,11 @@ SensorSampleHandler
 Runtime stops polling first, drains accepted worker work, then snapshots the
 sample metrics. This lifetime order ensures that no worker can still access the
 processor after it has been destroyed.
+
+Sequence classification happens before this worker path and does not delay
+typed decoding. Runtime exposes its aggregate `stream_metrics` separately.
+See [sensor stream tracking](sensor-stream-tracking.md) for the source identity
+and ordering contract.
 
 The `--count` option continues to count valid packet envelopes considered by
 Runtime. It includes packets later rejected for an invalid typed payload and
@@ -224,7 +233,7 @@ Read these together with the earlier layers:
 
 ## Scope boundaries
 
-The sensor sample processor deliberately does not provide:
+The sensor sample processor itself deliberately does not provide:
 
 - Sensor Source identity beyond carrying the observed UDP endpoints;
 - sequence-gap, duplicate, or reordering detection;
@@ -234,6 +243,10 @@ The sensor sample processor deliberately does not provide:
 - shared-memory distribution;
 - recording or replay.
 
-Those capabilities consume `SensorSample` values at this new seam. They do not
-need to understand packet byte order, CRC placement, or each payload's binary
-layout.
+Runtime now performs aggregate source identity and sequence classification
+upstream, before WorkerPipeline dispatch. It does not alter the processor's
+focused packet-to-sample responsibility.
+
+The remaining downstream capabilities consume `SensorSample` values at this
+seam. They do not need to understand packet byte order, CRC placement, or each
+payload's binary layout.

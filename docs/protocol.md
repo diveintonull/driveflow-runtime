@@ -24,6 +24,12 @@ does not depend on a C++ struct's padding or host byte order.
 | 24 | 4 | `payload_length` | Bytes after the header |
 | 28 | 4 | `crc32` | CRC-32/ISO-HDLC value described below |
 
+Protocol v1 does not encode an explicit source or source-session ID. Runtime
+interprets the per-source sequence number using the remote endpoint, local
+listener, and message type during one run. See
+[sensor stream tracking](sensor-stream-tracking.md) for the exact identity,
+wrap-around, and limitation semantics.
+
 The maximum payload is 65,475 bytes, keeping the complete v1 packet within the maximum IPv4 UDP
 payload of 65,507 bytes. Demo configurations should stay far below that limit to avoid IP
 fragmentation.

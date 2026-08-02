@@ -83,6 +83,10 @@ TEST(RuntimeIntegrationTest, DecodesSamplesOnWorkersAndDrainsAtCount) {
   EXPECT_NE(handler_threads[0], runtime_thread);
   EXPECT_NE(handler_threads[1], runtime_thread);
   EXPECT_EQ(summary.packets_received, 2U);
+  EXPECT_EQ(summary.stream_metrics.streams_observed, 2U);
+  EXPECT_EQ(summary.stream_metrics.packets_observed, 2U);
+  EXPECT_EQ(summary.stream_metrics.first_observations, 2U);
+  EXPECT_EQ(summary.stream_metrics.in_order_observations, 0U);
   EXPECT_EQ(summary.pipeline_metrics.packets_submitted, 2U);
   EXPECT_EQ(summary.pipeline_metrics.packets_processed, 2U);
   EXPECT_EQ(summary.pipeline_metrics.packets_dropped_queue_full, 0U);
@@ -96,6 +100,108 @@ TEST(RuntimeIntegrationTest, DecodesSamplesOnWorkersAndDrainsAtCount) {
   EXPECT_EQ(summary.receiver_metrics.datagrams_received, 2U);
   EXPECT_EQ(summary.receiver_metrics.packets_accepted, 2U);
   EXPECT_EQ(summary.receiver_metrics.packets_rejected, 0U);
+}
+
+TEST(RuntimeIntegrationTest, TracksSequenceOrderBeforeParallelDispatch) {
+  RuntimeConfig config;
+  config.receiver.listen_endpoints = {
+      {.address = "127.0.0.1", .port = 0U},
+  };
+  config.packet_count = 6U;
+  config.poll_timeout = std::chrono::milliseconds{50};
+  config.pipeline = {
+      .worker_count = 4U,
+      .queue_capacity = 8U,
+  };
+  Runtime runtime(config);
+  const auto listener = runtime.local_endpoints().front();
+
+  const auto payload =
+      protocol::encode_sensor_payload(protocol::SensorPayload{protocol::ImuSample{}});
+  constexpr std::array<std::uint64_t, 6> kSequences{
+      10U,
+      11U,
+      14U,
+      13U,
+      13U,
+      14U,
+  };
+  auto sender = net::UdpSocket::open();
+  for (const auto sequence : kSequences) {
+    sender.send_to(
+        protocol::encode_packet(protocol::MessageType::kImu, sequence,
+                                sequence * 10U, payload),
+        listener);
+  }
+
+  std::atomic_size_t handler_calls{};
+  const auto summary = runtime.run(
+      [] { return false; },
+      [&](const SensorSample&) {
+        handler_calls.fetch_add(1U, std::memory_order_relaxed);
+      });
+
+  EXPECT_EQ(handler_calls.load(std::memory_order_relaxed), kSequences.size());
+  EXPECT_EQ(summary.packets_received, kSequences.size());
+  EXPECT_EQ(summary.stream_metrics.streams_observed, 1U);
+  EXPECT_EQ(summary.stream_metrics.packets_observed, kSequences.size());
+  EXPECT_EQ(summary.stream_metrics.first_observations, 1U);
+  EXPECT_EQ(summary.stream_metrics.in_order_observations, 1U);
+  EXPECT_EQ(summary.stream_metrics.gap_observations, 1U);
+  EXPECT_EQ(summary.stream_metrics.duplicate_observations, 2U);
+  EXPECT_EQ(summary.stream_metrics.reordered_observations, 1U);
+  EXPECT_EQ(summary.stream_metrics.missing_samples_inferred, 2U);
+  EXPECT_EQ(summary.pipeline_metrics.packets_submitted, kSequences.size());
+  EXPECT_EQ(summary.pipeline_metrics.packets_processed, kSequences.size());
+  EXPECT_EQ(summary.pipeline_metrics.handler_failures, 0U);
+  EXPECT_EQ(summary.sample_metrics.packets_examined, kSequences.size());
+  EXPECT_EQ(summary.sample_metrics.samples_decoded, kSequences.size());
+  EXPECT_EQ(summary.sample_metrics.payloads_rejected, 0U);
+  EXPECT_EQ(summary.sample_metrics.imu_samples, kSequences.size());
+}
+
+TEST(RuntimeIntegrationTest, ContinuesProcessingAfterSourceCapacityIsReached) {
+  RuntimeConfig config;
+  config.receiver.listen_endpoints = {
+      {.address = "127.0.0.1", .port = 0U},
+  };
+  config.max_sensor_sources = 1U;
+  config.packet_count = 2U;
+  config.poll_timeout = std::chrono::milliseconds{50};
+  config.pipeline = {
+      .worker_count = 2U,
+      .queue_capacity = 4U,
+  };
+  Runtime runtime(config);
+  const auto listener = runtime.local_endpoints().front();
+
+  const auto payload =
+      protocol::encode_sensor_payload(protocol::SensorPayload{protocol::ImuSample{}});
+  auto first_sender = net::UdpSocket::open();
+  auto second_sender = net::UdpSocket::open();
+  first_sender.send_to(
+      protocol::encode_packet(protocol::MessageType::kImu, 1U, 10U, payload),
+      listener);
+  second_sender.send_to(
+      protocol::encode_packet(protocol::MessageType::kImu, 1U, 20U, payload),
+      listener);
+
+  std::atomic_size_t handler_calls{};
+  const auto summary = runtime.run(
+      [] { return false; },
+      [&](const SensorSample&) {
+        handler_calls.fetch_add(1U, std::memory_order_relaxed);
+      });
+
+  EXPECT_EQ(handler_calls.load(std::memory_order_relaxed), 2U);
+  EXPECT_EQ(summary.packets_received, 2U);
+  EXPECT_EQ(summary.stream_metrics.streams_observed, 1U);
+  EXPECT_EQ(summary.stream_metrics.packets_observed, 2U);
+  EXPECT_EQ(summary.stream_metrics.first_observations, 1U);
+  EXPECT_EQ(summary.stream_metrics.untracked_observations, 1U);
+  EXPECT_EQ(summary.pipeline_metrics.packets_submitted, 2U);
+  EXPECT_EQ(summary.pipeline_metrics.packets_processed, 2U);
+  EXPECT_EQ(summary.sample_metrics.samples_decoded, 2U);
 }
 
 TEST(RuntimeIntegrationTest, RejectsInvalidPayloadAfterPacketAcceptance) {
@@ -130,6 +236,9 @@ TEST(RuntimeIntegrationTest, RejectsInvalidPayloadAfterPacketAcceptance) {
   EXPECT_EQ(summary.packets_received, 1U);
   EXPECT_EQ(summary.receiver_metrics.packets_accepted, 1U);
   EXPECT_EQ(summary.receiver_metrics.packets_rejected, 0U);
+  EXPECT_EQ(summary.stream_metrics.streams_observed, 1U);
+  EXPECT_EQ(summary.stream_metrics.packets_observed, 1U);
+  EXPECT_EQ(summary.stream_metrics.first_observations, 1U);
   EXPECT_EQ(summary.pipeline_metrics.packets_processed, 1U);
   EXPECT_EQ(summary.pipeline_metrics.handler_failures, 0U);
   EXPECT_EQ(summary.sample_metrics.packets_examined, 1U);
@@ -162,6 +271,9 @@ TEST(RuntimeIntegrationTest, IsolatesSampleHandlerFailureInWorkerPipeline) {
       [] { return false; },
       [](const SensorSample&) { throw std::runtime_error("handler failed"); });
 
+  EXPECT_EQ(summary.stream_metrics.streams_observed, 1U);
+  EXPECT_EQ(summary.stream_metrics.packets_observed, 1U);
+  EXPECT_EQ(summary.stream_metrics.first_observations, 1U);
   EXPECT_EQ(summary.pipeline_metrics.packets_submitted, 1U);
   EXPECT_EQ(summary.pipeline_metrics.packets_processed, 0U);
   EXPECT_EQ(summary.pipeline_metrics.handler_failures, 1U);

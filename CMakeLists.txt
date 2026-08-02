@@ -58,6 +58,7 @@ set(DRIVEFLOW_FORMAT_SOURCES
     include/driveflow/runtime/runtime.hpp
     include/driveflow/runtime/runtime_config.hpp
     include/driveflow/runtime/sensor_sample_processor.hpp
+    include/driveflow/runtime/sensor_stream_tracker.hpp
     include/driveflow/runtime/worker_pipeline.hpp
     src/protocol/packet.cpp
     src/protocol/sensor_payload.cpp
@@ -68,6 +69,7 @@ set(DRIVEFLOW_FORMAT_SOURCES
     src/runtime/runtime.cpp
     src/runtime/runtime_config.cpp
     src/runtime/sensor_sample_processor.cpp
+    src/runtime/sensor_stream_tracker.cpp
     src/runtime/worker_pipeline.cpp
     apps/runtime_main.cpp
     apps/sensor_simulator_main.cpp
@@ -76,6 +78,7 @@ set(DRIVEFLOW_FORMAT_SOURCES
     tests/unit/protocol_packet_test.cpp
     tests/unit/runtime_config_test.cpp
     tests/unit/sensor_sample_processor_test.cpp
+    tests/unit/sensor_stream_tracker_test.cpp
     tests/unit/worker_pipeline_test.cpp
     tests/unit/sensor_payload_test.cpp
     tests/unit/sensor_simulator_test.cpp
@@ -147,6 +150,7 @@ add_library(
   src/runtime/runtime.cpp
   src/runtime/runtime_config.cpp
   src/runtime/sensor_sample_processor.cpp
+  src/runtime/sensor_stream_tracker.cpp
   src/runtime/worker_pipeline.cpp)
 add_library(DriveFlow::Runtime ALIAS driveflow_runtime)
 target_include_directories(
@@ -215,6 +219,10 @@ if(DRIVEFLOW_BUILD_TESTS)
                  tests/unit/sensor_sample_processor_test.cpp)
   target_link_libraries(
     sensor_sample_processor_test PRIVATE DriveFlow::Runtime GTest::gtest_main)
+  add_executable(sensor_stream_tracker_test
+                 tests/unit/sensor_stream_tracker_test.cpp)
+  target_link_libraries(
+    sensor_stream_tracker_test PRIVATE DriveFlow::Runtime GTest::gtest_main)
   add_executable(runtime_test tests/integration/runtime_test.cpp)
   target_link_libraries(
     runtime_test PRIVATE DriveFlow::Runtime GTest::gtest_main)
@@ -236,6 +244,8 @@ if(DRIVEFLOW_BUILD_TESTS)
                                                      "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
     set_property(TARGET sensor_sample_processor_test PROPERTY CXX_CLANG_TIDY
                                                               "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
+    set_property(TARGET sensor_stream_tracker_test PROPERTY CXX_CLANG_TIDY
+                                                             "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
     set_property(TARGET runtime_test PROPERTY CXX_CLANG_TIDY
                                               "${DRIVEFLOW_CLANG_TIDY_COMMAND}")
     set_property(TARGET worker_pipeline_test PROPERTY CXX_CLANG_TIDY
@@ -276,6 +286,10 @@ if(DRIVEFLOW_BUILD_TESTS)
       PROPERTY CROSSCOMPILING_EMULATOR
                "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
     set_property(
+      TARGET sensor_stream_tracker_test
+      PROPERTY CROSSCOMPILING_EMULATOR
+               "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
+    set_property(
       TARGET runtime_test
       PROPERTY CROSSCOMPILING_EMULATOR
                "${DRIVEFLOW_SETARCH_EXECUTABLE};${CMAKE_SYSTEM_PROCESSOR};-R")
@@ -293,6 +307,7 @@ if(DRIVEFLOW_BUILD_TESTS)
   gtest_discover_tests(epoll_receiver_test DISCOVERY_MODE PRE_TEST)
   gtest_discover_tests(runtime_config_test DISCOVERY_MODE PRE_TEST)
   gtest_discover_tests(sensor_sample_processor_test DISCOVERY_MODE PRE_TEST)
+  gtest_discover_tests(sensor_stream_tracker_test DISCOVERY_MODE PRE_TEST)
   gtest_discover_tests(
     runtime_test DISCOVERY_MODE PRE_TEST PROPERTIES TIMEOUT 5)
   gtest_discover_tests(

@@ -3,6 +3,7 @@
 #include "driveflow/runtime/epoll_receiver.hpp"
 #include "driveflow/runtime/runtime_config.hpp"
 #include "driveflow/runtime/sensor_sample_processor.hpp"
+#include "driveflow/runtime/sensor_stream_tracker.hpp"
 #include "driveflow/runtime/worker_pipeline.hpp"
 
 #include <cstdint>
@@ -16,6 +17,7 @@ using StopPredicate = std::function<bool()>;
 struct RuntimeSummary {
   std::uint64_t packets_received{};
   ReceiverMetrics receiver_metrics;
+  SensorStreamMetrics stream_metrics;
   WorkerPipelineMetrics pipeline_metrics;
   SensorSampleProcessorMetrics sample_metrics;
 };

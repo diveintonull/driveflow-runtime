@@ -4,6 +4,7 @@
 #include "driveflow/runtime/worker_pipeline.hpp"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -17,6 +18,7 @@ struct RuntimeConfig {
       .listen_endpoints = {{.address = "0.0.0.0", .port = 9'000U}},
   };
   WorkerPipelineConfig pipeline;
+  std::size_t max_sensor_sources{256U};
   std::optional<std::uint64_t> packet_count;
   std::chrono::milliseconds poll_timeout{100};
 };
