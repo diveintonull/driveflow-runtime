@@ -232,8 +232,19 @@ first_observations=1 in_order_observations=2 gap_observations=2
 duplicate_observations=2 reordered_observations=2 missing_samples_inferred=3
 ```
 
+Runtime also prints one per-source line containing these stable fields:
+
+```text
+status=DEGRADED packets_received=9 gaps=2 duplicates=2 reordered=2
+missing_inferred=3 payloads_rejected=0 dropped_queue_full=0
+```
+
+The source is degraded because the most recent sequence issue is still inside
+the default one-second recovery period when this short run ends.
+
 The exact `epoll_wakeups` and queue high-watermark can vary with scheduling and are not part of this
-demonstration's expected values.
+demonstration's expected values. Source UDP port, rate, inactivity, and latency
+also vary by run.
 
 To demonstrate corruption, run Runtime without `--count`, then send four packets with
 `--corrupt-every 2` and stop Runtime with `Ctrl+C`:
@@ -249,4 +260,7 @@ To demonstrate corruption, run Runtime without `--count`, then send four packets
 
 Runtime reports two accepted and two rejected datagrams. Only valid Sequence Numbers `1` and `3`
 reach stream tracking, so they produce one first observation and one gap with one inferred missing
-sample. This demonstrates why transport rejection and sequence tracking are separate metrics.
+sample. The admitted source is degraded by that gap. The two CRC failures remain
+in aggregate receiver rejection metrics because a packet envelope that cannot
+be trusted cannot always provide the message type required for Sensor Source
+identity.

@@ -29,7 +29,7 @@ class WorkerPipeline::Impl {
     }
   }
 
-  [[nodiscard]] SubmitResult try_submit(ReceivedPacket packet) {
+  [[nodiscard]] SubmitResult try_submit(ReceivedPacket&& packet) {
     {
       const std::scoped_lock lock(state_mutex_);
       if (!accepting_) {
@@ -147,7 +147,7 @@ WorkerPipeline::~WorkerPipeline() {
   }
 }
 
-SubmitResult WorkerPipeline::try_submit(ReceivedPacket packet) {
+SubmitResult WorkerPipeline::try_submit(ReceivedPacket&& packet) {
   return impl_->try_submit(std::move(packet));
 }
 

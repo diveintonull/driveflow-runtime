@@ -60,7 +60,9 @@ class WorkerPipeline {
   WorkerPipeline& operator=(WorkerPipeline&&) = delete;
 
   // Thread-safe and non-blocking with respect to worker execution.
-  [[nodiscard]] SubmitResult try_submit(ReceivedPacket packet);
+  // The packet is consumed only for kAccepted and remains unchanged when the
+  // queue is full or shutdown has started.
+  [[nodiscard]] SubmitResult try_submit(ReceivedPacket&& packet);
 
   // Thread-safe and idempotent. Stops accepting, drains accepted work, joins
   // all workers, and returns a stable metrics snapshot. Call this from outside

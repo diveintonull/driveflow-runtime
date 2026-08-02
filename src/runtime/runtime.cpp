@@ -1,5 +1,7 @@
 #include "driveflow/runtime/runtime.hpp"
 
+#include <chrono>
+#include <cstdint>
 #include <stdexcept>
 #include <utility>
 
@@ -20,11 +22,27 @@ namespace {
     throw std::invalid_argument(
         "runtime worker queue capacity must be greater than zero");
   }
-  if (config.max_sensor_sources == 0U) {
+  if (config.health.max_sources == 0U) {
     throw std::invalid_argument(
         "runtime sensor source capacity must be greater than zero");
   }
+  if (config.health.healthy_after_packets == 0U ||
+      config.health.degraded_after.count() <= 0 ||
+      config.health.recovery_after.count() <= 0) {
+    throw std::invalid_argument(
+        "runtime source health counts and durations must be positive");
+  }
+  if (config.health.offline_after <= config.health.degraded_after) {
+    throw std::invalid_argument(
+        "runtime offline timeout must exceed degraded timeout");
+  }
   return config;
+}
+
+[[nodiscard]] std::uint64_t current_monotonic_timestamp_ns() noexcept {
+  const auto elapsed = std::chrono::steady_clock::now().time_since_epoch();
+  return static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
 }
 
 }  // namespace
@@ -50,12 +68,16 @@ RuntimeSummary Runtime::run(StopPredicate stop_requested,
     return config_.packet_count.has_value() &&
            summary.packets_received >= *config_.packet_count;
   };
-  SensorStreamTracker stream_tracker(
-      {.max_sources = config_.max_sensor_sources});
+  SourceHealthMonitor health_monitor(config_.health);
   SensorSampleProcessor sample_processor(std::move(sample_handler));
   WorkerPipeline pipeline(
-      config_.pipeline, [&sample_processor](const ReceivedPacket& packet) {
-        (void)sample_processor.process(packet);
+      config_.pipeline,
+      [&sample_processor, &health_monitor](const ReceivedPacket& packet) {
+        const auto error = sample_processor.process(packet);
+        if (error != protocol::SensorPayloadError::kNone) {
+          health_monitor.observe_issue(
+              packet, SourceHealthIssue::kPayloadRejected);
+        }
       });
 
   while (!stop_requested() && !limit_reached()) {
@@ -64,16 +86,22 @@ RuntimeSummary Runtime::run(StopPredicate stop_requested,
       if (stop_requested() || limit_reached()) {
         break;
       }
-      (void)stream_tracker.observe(packet);
-      (void)pipeline.try_submit(std::move(packet));
+      (void)health_monitor.observe_packet(packet);
+      const auto submit_result = pipeline.try_submit(std::move(packet));
+      if (submit_result == SubmitResult::kQueueFull) {
+        health_monitor.observe_issue(packet, SourceHealthIssue::kQueueDropped);
+      }
       ++summary.packets_received;
     }
   }
 
+  const auto report_timestamp_ns = current_monotonic_timestamp_ns();
   summary.pipeline_metrics = pipeline.stop();
-  summary.stream_metrics = stream_tracker.metrics();
   summary.sample_metrics = sample_processor.metrics();
   summary.receiver_metrics = receiver_.metrics();
+  auto health_report = health_monitor.report(report_timestamp_ns);
+  summary.stream_metrics = health_report.stream_metrics;
+  summary.source_health = std::move(health_report.sources);
   return summary;
 }
 

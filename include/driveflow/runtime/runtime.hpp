@@ -3,12 +3,14 @@
 #include "driveflow/runtime/epoll_receiver.hpp"
 #include "driveflow/runtime/runtime_config.hpp"
 #include "driveflow/runtime/sensor_sample_processor.hpp"
+#include "driveflow/runtime/source_health_monitor.hpp"
 #include "driveflow/runtime/sensor_stream_tracker.hpp"
 #include "driveflow/runtime/worker_pipeline.hpp"
 
 #include <cstdint>
 #include <functional>
 #include <span>
+#include <vector>
 
 namespace driveflow::runtime {
 
@@ -20,6 +22,7 @@ struct RuntimeSummary {
   SensorStreamMetrics stream_metrics;
   WorkerPipelineMetrics pipeline_metrics;
   SensorSampleProcessorMetrics sample_metrics;
+  std::vector<SourceHealthSnapshot> source_health;
 };
 
 class Runtime {

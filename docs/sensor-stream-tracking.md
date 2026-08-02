@@ -5,11 +5,12 @@ validated ReceivedPacket
           |
           | single Runtime I/O thread, receive order
           v
-SensorStreamTracker
+SourceHealthMonitor
           |
-          +-- identify Sensor Source
-          +-- classify sequence number
-          +-- update bounded stream state and metrics
+          +-- owns SensorStreamTracker
+          +-- identifies Sensor Source
+          +-- classifies sequence number
+          +-- updates bounded stream and health state
           |
           v
 WorkerPipeline
@@ -17,7 +18,8 @@ WorkerPipeline
 
 `SensorStreamTracker` turns packet-header sequence numbers into explicit stream
 observations without confusing worker scheduling with network ordering. Runtime
-calls it after packet-envelope validation and before parallel worker dispatch.
+calls it through `SourceHealthMonitor` after packet-envelope validation and
+before parallel worker dispatch. The tracker remains independently usable.
 
 ## Sensor Source identity
 
@@ -249,6 +251,11 @@ sequence behavior.
 See [Sensor simulator](simulator.md#end-to-end-stream-tracker-demonstration) for
 the complete two-terminal commands and expected output.
 
+Runtime now composes this tracker inside
+[Source health monitoring](source-health-monitoring.md), which adds bounded
+per-source rate, latency, issue counters, liveness, and health snapshots without
+moving sequence comparison onto worker threads.
+
 ## Scope boundaries
 
 The tracker deliberately does not provide:
@@ -256,10 +263,9 @@ The tracker deliberately does not provide:
 - durable hardware or session identity;
 - automatic source expiration or state eviction;
 - confirmation that a gap became permanent loss;
-- per-source rate, latency, or liveness assessment;
 - per-source ordered worker execution;
-- persistence across Runtime restarts;
-- per-source metrics snapshots.
+- thread-safe concurrent sequence observation;
+- persistence across Runtime restarts.
 
-Those policies can build on the source identity and sequence semantics defined
-here without moving sequence comparison onto worker threads.
+Those remaining policies can build on the source identity and sequence
+semantics defined here.

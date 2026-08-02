@@ -3,7 +3,7 @@
 ```text
 epoll I/O thread
       |
-      | try_submit(ReceivedPacket)
+      | try_submit(ReceivedPacket&&)
       v
 bounded FIFO queue
       |
@@ -64,14 +64,17 @@ Submission does not wait for a worker or for queue space. It only holds the
 pipeline's state lock long enough to inspect the state and, when possible,
 move the packet into the queue.
 
-The packet is passed by value so callers can move it into the pipeline:
+The packet is passed by rvalue reference so callers can transfer ownership
+without copying its payload:
 
 ```cpp
 const auto result = pipeline.try_submit(std::move(packet));
 ```
 
-After that call, the caller should not depend on the moved-from packet value,
-regardless of the result.
+The packet is moved only when the result is `kAccepted`. For `kQueueFull` and
+`kStopped`, it remains unchanged. Runtime uses this guarantee to inspect a
+rejected packet and attribute a queue-full issue to the correct Sensor Source.
+Callers must not inspect the packet after `kAccepted`.
 
 ## Queue-full policy
 
@@ -212,6 +215,9 @@ receive order and records a valid packet even if the bounded queue later drops
 that packet. Running the tracker inside workers would confuse worker scheduling
 with network reordering. See
 [sensor stream tracking](sensor-stream-tracking.md).
+
+A queue-full result is also recorded in the admitted source's health snapshot.
+See [source health monitoring](source-health-monitoring.md).
 
 In the normal Runtime path, the pipeline's `PacketProcessor` is an internal
 adapter that calls `SensorSampleProcessor::process`. Type-specific decoding

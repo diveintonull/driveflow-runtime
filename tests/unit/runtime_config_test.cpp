@@ -11,7 +11,7 @@ namespace driveflow::runtime {
 namespace {
 
 TEST(RuntimeConfigTest, ParsesMultipleListenersAndRuntimeLimits) {
-  constexpr std::array<std::string_view, 16> arguments{
+  constexpr std::array<std::string_view, 22> arguments{
       "--listen",         "127.0.0.1:9001",
       "--listen",         "0.0.0.0:9002",
       "--count",          "12",
@@ -20,6 +20,9 @@ TEST(RuntimeConfigTest, ParsesMultipleListenersAndRuntimeLimits) {
       "--max-sources",    "64",
       "--workers",        "3",
       "--queue-capacity", "128",
+      "--health-degraded-ms", "250",
+      "--health-offline-ms",  "1500",
+      "--health-recovery-ms", "750",
   };
 
   const auto result = parse_runtime_config(arguments);
@@ -31,7 +34,10 @@ TEST(RuntimeConfigTest, ParsesMultipleListenersAndRuntimeLimits) {
   EXPECT_EQ(result.config->receiver.listen_endpoints[1],
             (net::Ipv4Endpoint{.address = "0.0.0.0", .port = 9'002U}));
   EXPECT_EQ(result.config->receiver.max_datagrams_per_listener_per_poll, 7U);
-  EXPECT_EQ(result.config->max_sensor_sources, 64U);
+  EXPECT_EQ(result.config->health.max_sources, 64U);
+  EXPECT_EQ(result.config->health.degraded_after, std::chrono::milliseconds{250});
+  EXPECT_EQ(result.config->health.offline_after, std::chrono::milliseconds{1'500});
+  EXPECT_EQ(result.config->health.recovery_after, std::chrono::milliseconds{750});
   EXPECT_EQ(result.config->pipeline.worker_count, 3U);
   EXPECT_EQ(result.config->pipeline.queue_capacity, 128U);
   EXPECT_EQ(result.config->packet_count, 12U);
@@ -51,6 +57,29 @@ TEST(RuntimeConfigTest, RejectsInvalidIpv4Listener) {
 TEST(RuntimeConfigTest, RejectsDuplicateSingletonOption) {
   constexpr std::array<std::string_view, 4> arguments{
       "--count", "1", "--count", "2"};
+
+  const auto result = parse_runtime_config(arguments);
+
+  EXPECT_FALSE(result);
+  EXPECT_FALSE(result.error.empty());
+}
+
+TEST(RuntimeConfigTest, RejectsOfflineTimeoutNotGreaterThanDegradedTimeout) {
+  constexpr std::array<std::string_view, 4> arguments{
+      "--health-degraded-ms", "500",
+      "--health-offline-ms", "500",
+  };
+
+  const auto result = parse_runtime_config(arguments);
+
+  EXPECT_FALSE(result);
+  EXPECT_FALSE(result.error.empty());
+}
+
+TEST(RuntimeConfigTest, RejectsHealthDurationThatCannotFitNanoseconds) {
+  constexpr std::array<std::string_view, 2> arguments{
+      "--health-recovery-ms", "18446744073709551615",
+  };
 
   const auto result = parse_runtime_config(arguments);
 

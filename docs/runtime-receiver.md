@@ -12,9 +12,9 @@ Single-threaded epoll receiver
        |
        | packet header, length, version, and CRC validated
        v
-SensorStreamTracker
+SourceHealthMonitor (owns SensorStreamTracker)
        |
-       | source identified and sequence classified in receive order
+       | source identified, sequence classified, health updated
        v
 Bounded worker queue
        |
@@ -39,8 +39,10 @@ payloads. `SensorSampleProcessor` performs payload decoding on worker threads,
 outside the latency-sensitive I/O receive path.
 
 Runtime classifies source sequence numbers on the same I/O thread before
-parallel dispatch. See [sensor stream tracking](sensor-stream-tracking.md) for
-source identity, wrap-around, bounded history, and metric semantics.
+parallel dispatch. `SourceHealthMonitor` owns that tracker and combines its
+observations with rate, latency, liveness, typed-payload rejection, and local
+queue-drop measurements. See [sensor stream tracking](sensor-stream-tracking.md)
+and [source health monitoring](source-health-monitoring.md).
 
 The Runtime moves valid packets into a bounded queue so slow processing cannot
 block socket draining or grow memory without limit. See
@@ -133,9 +135,9 @@ independently sequenced sensor types sent from one socket. It is not a durable
 hardware or restart identity.
 
 The source table is bounded. `--max-sources` sets the number of admitted source
-states. A packet from a new source after the table is full is counted as
-untracked but continues into the worker pipeline; packets from already admitted
-sources continue to be classified.
+sequence and health states. A packet from a new source after the table is full
+is counted as untracked but continues into the worker pipeline; packets from
+already admitted sources continue to be classified and monitored.
 
 ## Command-line options
 
@@ -145,13 +147,17 @@ sources continue to be classified.
 | `--count <packets>` | Stop after receiving this many valid packets | continuous |
 | `--poll-timeout-ms <ms>` | Maximum `epoll_wait` duration | 100 |
 | `--max-drain <datagrams>` | Maximum datagrams drained from one ready socket per poll | 64 |
-| `--max-sources <sources>` | Maximum Sensor Sources retained by sequence tracking | 256 |
+| `--max-sources <sources>` | Maximum Sensor Sources retained by tracking and health | 256 |
+| `--health-degraded-ms <ms>` | Silence before an active source becomes degraded | 500 |
+| `--health-offline-ms <ms>` | Silence before a source becomes offline | 2000 |
+| `--health-recovery-ms <ms>` | Minimum issue-free time before recovery | 1000 |
 | `--workers <threads>` | Worker thread count | 2 |
 | `--queue-capacity <packets>` | Maximum packets waiting for workers | 1024 |
 | `--help` | Print usage | none |
 
-Ports, counts, timeouts, drain limits, source limits, worker counts, and queue
-capacities must be positive. Singleton options cannot be repeated. `--listen` is the only
+Ports, counts, durations, drain limits, source limits, worker counts, and queue
+capacities must be positive. The offline duration must exceed the degraded
+duration. Singleton options cannot be repeated. `--listen` is the only
 repeatable option.
 
 ## Packet acceptance
@@ -224,6 +230,13 @@ The final CLI summary reports:
 | `gnss_samples` | Successfully decoded GNSS samples |
 | `camera_meta_samples` | Successfully decoded camera metadata samples |
 
+The executable then prints one `source_health` line per admitted Sensor Source.
+It includes status, recent receive rate, inactivity, latest and maximum latency,
+timestamp anomalies, sequence anomaly counters, inferred missing samples,
+typed-payload rejections, and queue-full drops. Exact field semantics and state
+priority are defined in
+[source health monitoring](source-health-monitoring.md).
+
 A timeout is not counted as an `epoll` wakeup.
 
 After a graceful drain, `submitted` equals `processed + handler_failures`.
@@ -290,7 +303,10 @@ config.pipeline = {
     .worker_count = 4,
     .queue_capacity = 4096,
 };
-config.max_sensor_sources = 256;
+config.health.max_sources = 256;
+config.health.degraded_after = std::chrono::milliseconds{500};
+config.health.offline_after = std::chrono::seconds{2};
+config.health.recovery_after = std::chrono::seconds{1};
 config.poll_timeout = std::chrono::milliseconds{100};
 
 driveflow::runtime::Runtime runtime(config);
@@ -312,13 +328,13 @@ concurrency, failure, and metric semantics.
 
 The Runtime processing path does not provide:
 
-- per-source rate or latency aggregation;
-- source-health state;
+- a live external CLI or IPC query channel while `run()` is active;
+- latency percentiles or expected-rate compliance;
 - durable source or source-session identity;
 - automatic source expiration or tracker state eviction;
 - per-source ordering partitions;
 - batching with `recvmmsg`;
 - persistent recording, replay, or shared-memory distribution.
 
-Those capabilities can be added downstream without changing how sockets are
-registered and drained.
+Those capabilities can build on the returned health snapshots without changing
+how sockets are registered and drained.

@@ -30,6 +30,19 @@ namespace {
   return value;
 }
 
+[[nodiscard]] std::optional<std::chrono::nanoseconds> parse_milliseconds(
+    std::uint64_t value) {
+  constexpr auto kNanosecondsPerMillisecond = std::uint64_t{1'000'000U};
+  const auto maximum = static_cast<std::uint64_t>(
+      std::numeric_limits<std::chrono::nanoseconds::rep>::max());
+  if (value > maximum / kNanosecondsPerMillisecond) {
+    return std::nullopt;
+  }
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::milliseconds{
+          static_cast<std::chrono::milliseconds::rep>(value)});
+}
+
 [[nodiscard]] std::optional<net::Ipv4Endpoint> parse_endpoint(
     std::string_view text) {
   const auto separator = text.rfind(':');
@@ -110,7 +123,21 @@ ParseRuntimeConfigResult parse_runtime_config(
           static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
         return failure("--max-sources is too large");
       }
-      config.max_sensor_sources = static_cast<std::size_t>(*number);
+      config.health.max_sources = static_cast<std::size_t>(*number);
+    } else if (option == "--health-degraded-ms" ||
+               option == "--health-offline-ms" ||
+               option == "--health-recovery-ms") {
+      const auto duration = parse_milliseconds(*number);
+      if (!duration.has_value()) {
+        return failure(std::string(option) + " is too large");
+      }
+      if (option == "--health-degraded-ms") {
+        config.health.degraded_after = *duration;
+      } else if (option == "--health-offline-ms") {
+        config.health.offline_after = *duration;
+      } else {
+        config.health.recovery_after = *duration;
+      }
     } else if (option == "--workers") {
       if (*number >
           static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
@@ -128,6 +155,11 @@ ParseRuntimeConfigResult parse_runtime_config(
     }
   }
 
+  if (config.health.offline_after <= config.health.degraded_after) {
+    return failure(
+        "--health-offline-ms must exceed --health-degraded-ms");
+  }
+
   return {.config = std::move(config), .error = {}};
 }
 
@@ -139,6 +171,9 @@ std::string_view runtime_usage() noexcept {
       "  --poll-timeout-ms <ms>      epoll wait timeout (default: 100)\n"
       "  --max-drain <datagrams>     per-listener drain limit (default: 64)\n"
       "  --max-sources <sources>     tracked sensor source limit (default: 256)\n"
+      "  --health-degraded-ms <ms>  silence before DEGRADED (default: 500)\n"
+      "  --health-offline-ms <ms>   silence before OFFLINE (default: 2000)\n"
+      "  --health-recovery-ms <ms>  issue-free recovery time (default: 1000)\n"
       "  --workers <threads>          worker thread count (default: 2)\n"
       "  --queue-capacity <packets>  maximum waiting packets (default: 1024)\n"
       "default listener: 0.0.0.0:9000\n";

@@ -243,9 +243,12 @@ The sensor sample processor itself deliberately does not provide:
 - shared-memory distribution;
 - recording or replay.
 
-Runtime now performs aggregate source identity and sequence classification
-upstream, before WorkerPipeline dispatch. It does not alter the processor's
-focused packet-to-sample responsibility.
+Runtime's `SourceHealthMonitor` performs source identity and sequence
+classification upstream, before WorkerPipeline dispatch. When this processor
+returns a typed-payload error, the worker reports that issue back to the
+monitor. This integration does not alter the processor's focused
+packet-to-sample responsibility. See
+[source health monitoring](source-health-monitoring.md).
 
 The remaining downstream capabilities consume `SensorSample` values at this
 seam. They do not need to understand packet byte order, CRC placement, or each

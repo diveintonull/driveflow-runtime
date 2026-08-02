@@ -6,6 +6,7 @@
 #include <latch>
 #include <mutex>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -68,8 +69,11 @@ TEST(WorkerPipelineTest, RejectsNewestPacketWhenBoundedQueueIsFull) {
   first_packet_started.wait();
   EXPECT_EQ(pipeline.try_submit(make_received_packet(2U)),
             SubmitResult::kAccepted);
-  EXPECT_EQ(pipeline.try_submit(make_received_packet(3U)),
+  auto rejected_packet = make_received_packet(3U);
+  EXPECT_EQ(pipeline.try_submit(std::move(rejected_packet)),
             SubmitResult::kQueueFull);
+  EXPECT_EQ(rejected_packet.packet.header.sequence_number, 3U);
+  EXPECT_EQ(rejected_packet.source.port, 40'000U);
 
   release_first_packet.count_down();
   const auto metrics = pipeline.stop();

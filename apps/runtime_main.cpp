@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <csignal>
 #include <exception>
+#include <iomanip>
 #include <iostream>
 #include <string_view>
 #include <vector>
@@ -17,6 +18,19 @@ void handle_stop_signal(int) { stop_requested = 1; }
 [[nodiscard]] bool install_signal_handlers() noexcept {
   return std::signal(SIGINT, handle_stop_signal) != SIG_ERR &&
          std::signal(SIGTERM, handle_stop_signal) != SIG_ERR;
+}
+
+[[nodiscard]] const char* message_type_name(
+    driveflow::protocol::MessageType message_type) noexcept {
+  switch (message_type) {
+    case driveflow::protocol::MessageType::kImu:
+      return "imu";
+    case driveflow::protocol::MessageType::kGnss:
+      return "gnss";
+    case driveflow::protocol::MessageType::kCameraMeta:
+      return "camera-meta";
+  }
+  return "unknown";
 }
 
 }  // namespace
@@ -103,6 +117,38 @@ int main(int argc, char* argv[]) {
               << " camera_meta_samples="
               << summary.sample_metrics.camera_meta_samples
               << '\n';
+
+    constexpr double kNanosecondsPerMillisecond = 1'000'000.0;
+    for (const auto& source : summary.source_health) {
+      std::cout << std::fixed << std::setprecision(2)
+                << "source_health"
+                << " remote=" << source.source.remote_endpoint.address << ':'
+                << source.source.remote_endpoint.port
+                << " listener=" << source.source.listener_endpoint.address
+                << ':' << source.source.listener_endpoint.port
+                << " message_type="
+                << message_type_name(source.source.message_type)
+                << " status=" << driveflow::runtime::to_string(source.status)
+                << " packets_received=" << source.packets_received
+                << " rate_hz=" << source.current_rate_hz
+                << " inactivity_ms="
+                << static_cast<double>(source.inactivity_ns) /
+                       kNanosecondsPerMillisecond
+                << " latest_latency_ms="
+                << static_cast<double>(source.latest_latency_ns) /
+                       kNanosecondsPerMillisecond
+                << " maximum_latency_ms="
+                << static_cast<double>(source.maximum_latency_ns) /
+                       kNanosecondsPerMillisecond
+                << " timestamp_anomalies=" << source.timestamp_anomalies
+                << " gaps=" << source.gap_observations
+                << " duplicates=" << source.duplicate_observations
+                << " reordered=" << source.reordered_observations
+                << " missing_inferred=" << source.missing_samples_inferred
+                << " payloads_rejected=" << source.payloads_rejected
+                << " dropped_queue_full="
+                << source.packets_dropped_queue_full << '\n';
+    }
   } catch (const std::exception& error) {
     std::cerr << "runtime failed: " << error.what() << '\n';
     return 3;

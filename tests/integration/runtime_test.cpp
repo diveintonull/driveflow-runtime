@@ -100,6 +100,11 @@ TEST(RuntimeIntegrationTest, DecodesSamplesOnWorkersAndDrainsAtCount) {
   EXPECT_EQ(summary.receiver_metrics.datagrams_received, 2U);
   EXPECT_EQ(summary.receiver_metrics.packets_accepted, 2U);
   EXPECT_EQ(summary.receiver_metrics.packets_rejected, 0U);
+  ASSERT_EQ(summary.source_health.size(), 2U);
+  EXPECT_EQ(summary.source_health[0].status, SourceHealthStatus::kUnknown);
+  EXPECT_EQ(summary.source_health[1].status, SourceHealthStatus::kUnknown);
+  EXPECT_EQ(summary.source_health[0].packets_received, 1U);
+  EXPECT_EQ(summary.source_health[1].packets_received, 1U);
 }
 
 TEST(RuntimeIntegrationTest, TracksSequenceOrderBeforeParallelDispatch) {
@@ -158,6 +163,12 @@ TEST(RuntimeIntegrationTest, TracksSequenceOrderBeforeParallelDispatch) {
   EXPECT_EQ(summary.sample_metrics.samples_decoded, kSequences.size());
   EXPECT_EQ(summary.sample_metrics.payloads_rejected, 0U);
   EXPECT_EQ(summary.sample_metrics.imu_samples, kSequences.size());
+  ASSERT_EQ(summary.source_health.size(), 1U);
+  EXPECT_EQ(summary.source_health.front().status,
+            SourceHealthStatus::kDegraded);
+  EXPECT_EQ(summary.source_health.front().gap_observations, 1U);
+  EXPECT_EQ(summary.source_health.front().duplicate_observations, 2U);
+  EXPECT_EQ(summary.source_health.front().reordered_observations, 1U);
 }
 
 TEST(RuntimeIntegrationTest, ContinuesProcessingAfterSourceCapacityIsReached) {
@@ -165,7 +176,7 @@ TEST(RuntimeIntegrationTest, ContinuesProcessingAfterSourceCapacityIsReached) {
   config.receiver.listen_endpoints = {
       {.address = "127.0.0.1", .port = 0U},
   };
-  config.max_sensor_sources = 1U;
+  config.health.max_sources = 1U;
   config.packet_count = 2U;
   config.poll_timeout = std::chrono::milliseconds{50};
   config.pipeline = {
@@ -202,6 +213,7 @@ TEST(RuntimeIntegrationTest, ContinuesProcessingAfterSourceCapacityIsReached) {
   EXPECT_EQ(summary.pipeline_metrics.packets_submitted, 2U);
   EXPECT_EQ(summary.pipeline_metrics.packets_processed, 2U);
   EXPECT_EQ(summary.sample_metrics.samples_decoded, 2U);
+  EXPECT_EQ(summary.source_health.size(), 1U);
 }
 
 TEST(RuntimeIntegrationTest, RejectsInvalidPayloadAfterPacketAcceptance) {
@@ -244,6 +256,10 @@ TEST(RuntimeIntegrationTest, RejectsInvalidPayloadAfterPacketAcceptance) {
   EXPECT_EQ(summary.sample_metrics.packets_examined, 1U);
   EXPECT_EQ(summary.sample_metrics.samples_decoded, 0U);
   EXPECT_EQ(summary.sample_metrics.payloads_rejected, 1U);
+  ASSERT_EQ(summary.source_health.size(), 1U);
+  EXPECT_EQ(summary.source_health.front().status,
+            SourceHealthStatus::kDegraded);
+  EXPECT_EQ(summary.source_health.front().payloads_rejected, 1U);
 }
 
 TEST(RuntimeIntegrationTest, IsolatesSampleHandlerFailureInWorkerPipeline) {
@@ -281,6 +297,57 @@ TEST(RuntimeIntegrationTest, IsolatesSampleHandlerFailureInWorkerPipeline) {
   EXPECT_EQ(summary.sample_metrics.samples_decoded, 1U);
   EXPECT_EQ(summary.sample_metrics.payloads_rejected, 0U);
   EXPECT_EQ(summary.sample_metrics.imu_samples, 1U);
+  ASSERT_EQ(summary.source_health.size(), 1U);
+  EXPECT_EQ(summary.source_health.front().payloads_rejected, 0U);
+}
+
+TEST(RuntimeIntegrationTest, ReportsSourceOfflineAfterReceiveSilence) {
+  RuntimeConfig config;
+  config.receiver.listen_endpoints = {
+      {.address = "127.0.0.1", .port = 0U},
+  };
+  config.poll_timeout = std::chrono::milliseconds{5};
+  config.pipeline = {
+      .worker_count = 1U,
+      .queue_capacity = 4U,
+  };
+  config.health = {
+      .max_sources = 8U,
+      .healthy_after_packets = 2U,
+      .degraded_after = std::chrono::milliseconds{20},
+      .offline_after = std::chrono::milliseconds{50},
+      .recovery_after = std::chrono::milliseconds{10},
+  };
+  Runtime runtime(config);
+  const auto listener = runtime.local_endpoints().front();
+
+  const auto payload = protocol::encode_sensor_payload(
+      protocol::SensorPayload{protocol::ImuSample{}});
+  auto sender = net::UdpSocket::open();
+  sender.send_to(
+      protocol::encode_packet(protocol::MessageType::kImu, 1U, 10U, payload),
+      listener);
+  sender.send_to(
+      protocol::encode_packet(protocol::MessageType::kImu, 2U, 20U, payload),
+      listener);
+
+  const auto stop_at =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds{100};
+  std::atomic_size_t handler_calls{};
+  const auto summary = runtime.run(
+      [&] { return std::chrono::steady_clock::now() >= stop_at; },
+      [&](const SensorSample&) {
+        handler_calls.fetch_add(1U, std::memory_order_relaxed);
+      });
+
+  EXPECT_EQ(handler_calls.load(std::memory_order_relaxed), 2U);
+  EXPECT_EQ(summary.packets_received, 2U);
+  ASSERT_EQ(summary.source_health.size(), 1U);
+  EXPECT_EQ(summary.source_health.front().packets_received, 2U);
+  EXPECT_EQ(summary.source_health.front().status,
+            SourceHealthStatus::kOffline);
+  EXPECT_GE(summary.source_health.front().inactivity_ns,
+            50'000'000U);
 }
 
 }  // namespace
