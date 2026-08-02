@@ -195,7 +195,7 @@ increment Runtime packets_received
         v
 try_submit to WorkerPipeline
         |
-        +-- accepted ------> process on worker
+        +-- accepted ------> SensorSampleProcessor on worker
         |
         +-- queue full ----> count and discard
 ```
@@ -204,16 +204,23 @@ When the stop predicate becomes true or `--count` is reached, Runtime stops
 polling sockets and calls `WorkerPipeline::stop()`. `Runtime::run` returns only
 after accepted work has drained.
 
-`--count` counts valid packets considered by Runtime, including packets rejected
-because the worker queue was full. This makes a bounded experiment terminate
-after the requested amount of input even under overload.
+In the normal Runtime path, the pipeline's `PacketProcessor` is an internal
+adapter that calls `SensorSampleProcessor::process`. Type-specific decoding
+therefore stays off the I/O thread. An invalid typed payload returns normally
+from the adapter and is distinguished by the sample rejection metric.
 
-The final executable summary includes both receiver and pipeline metrics:
+`--count` counts valid packets considered by Runtime, including packets
+rejected because the worker queue was full or later rejected by typed payload
+validation. This makes a bounded experiment terminate after the requested
+amount of network input even under overload.
+
+The final executable summary includes receiver, pipeline, and sample metrics:
 
 ```text
 runtime stopped received=10 datagrams=10 accepted=10 rejected=0 \
 epoll_wakeups=4 submitted=10 processed=10 dropped_queue_full=0 \
-rejected_stopped=0 handler_failures=0 queue_high_watermark=3
+rejected_stopped=0 handler_failures=0 queue_high_watermark=3 \
+packets_examined=10 samples_decoded=10 payloads_rejected=0
 ```
 
 ## Library use
@@ -233,10 +240,12 @@ config.pipeline = {
 driveflow::runtime::Runtime runtime(config);
 const auto summary = runtime.run(
     [] { return application_should_stop(); },
-    [](const driveflow::runtime::ReceivedPacket& packet) {
-      process_packet(packet);
+    [](const driveflow::runtime::SensorSample& sample) {
+      process_sample(sample);
     });
 ```
+
+See [sensor sample processing](sensor-sample-processing.md) for the typed seam.
 
 `WorkerPipeline` can also be used directly when another producer already has
 `ReceivedPacket` values:

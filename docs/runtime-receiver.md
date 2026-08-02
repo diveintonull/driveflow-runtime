@@ -18,7 +18,11 @@ Bounded worker queue
 Worker threads
        |
        v
-PacketProcessor
+SensorSampleProcessor
+       |
+       | typed SensorSample
+       v
+SensorSampleHandler
 ```
 
 The DriveFlow runtime receiver is the long-running network entry point for
@@ -27,8 +31,8 @@ sensor packets. It uses Linux non-blocking UDP sockets and one level-triggered
 
 The receiver deliberately stops at the packet boundary. It validates the
 DriveFlow packet envelope and CRC, but it does not decode IMU, GNSS, or camera
-payloads. Payload decoding and downstream processing belong in the worker
-pipeline.
+payloads. `SensorSampleProcessor` performs payload decoding on worker threads,
+outside the latency-sensitive I/O receive path.
 
 The Runtime moves valid packets into a bounded queue so slow processing cannot
 block socket draining or grow memory without limit. See
@@ -141,8 +145,9 @@ not terminate the process, and later datagrams on the same socket remain
 receivable.
 
 A packet can pass this layer even if its type-specific sensor payload is
-invalid. This is intentional: payload decoding can run from the
-`PacketProcessor` on a worker, outside the I/O receive path.
+invalid. Runtime's `SensorSampleProcessor` performs this second validation on
+a worker, outside the I/O receive path. An invalid typed payload increments the
+sample rejection metric and does not reach the `SensorSampleHandler`.
 
 ## Receiver metadata
 
@@ -176,12 +181,25 @@ The final CLI summary reports:
 | `rejected_stopped` | Submissions rejected after pipeline shutdown began |
 | `handler_failures` | Packet processor calls that threw |
 | `queue_high_watermark` | Largest observed number of waiting packets |
+| `packets_examined` | Worker packets examined by the sensor sample processor |
+| `samples_decoded` | Payloads decoded into typed sensor samples |
+| `payloads_rejected` | Valid packet envelopes with invalid typed payloads |
+| `imu_samples` | Successfully decoded IMU samples |
+| `gnss_samples` | Successfully decoded GNSS samples |
+| `camera_meta_samples` | Successfully decoded camera metadata samples |
 
 A timeout is not counted as an `epoll` wakeup.
 
 After a graceful drain, `submitted` equals `processed + handler_failures`.
 `received` equals `submitted + dropped_queue_full` in the normal Runtime
 path.
+
+Stable sample metrics also satisfy:
+
+```text
+packets_examined = samples_decoded + payloads_rejected
+samples_decoded = imu_samples + gnss_samples + camera_meta_samples
+```
 
 ## Why level-triggered epoll
 
@@ -229,21 +247,23 @@ config.poll_timeout = std::chrono::milliseconds{100};
 driveflow::runtime::Runtime runtime(config);
 const auto summary = runtime.run(
     [] { return application_should_stop(); },
-    [](const driveflow::runtime::ReceivedPacket& packet) {
-      process_packet(packet);
+    [](const driveflow::runtime::SensorSample& sample) {
+      process_sample(sample);
     });
 ```
 
-Runtime invokes the handler from its workers, possibly concurrently and in a
-different completion order from packet arrival. The handler must synchronize
-any shared mutable state. `Runtime::run` returns only after accepted work has
-drained.
+Runtime decodes typed payloads on worker threads before invoking the handler.
+The handler may run concurrently and in a different completion order from
+packet arrival, so it must synchronize any shared mutable state.
+`Runtime::run` returns only after accepted work has drained. See
+[sensor sample processing](sensor-sample-processing.md) for validation,
+concurrency, failure, and metric semantics.
 
 ## Scope boundaries
 
-The receiver and worker pipeline do not provide:
+The Runtime processing path does not provide:
 
-- type-specific sensor payload decoding;
+- per-source rate or latency aggregation;
 - sequence-gap, duplicate, or reordering detection;
 - source-health state;
 - per-source ordering partitions;

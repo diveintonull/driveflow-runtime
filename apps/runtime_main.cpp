@@ -56,7 +56,7 @@ int main(int argc, char* argv[]) {
 
     const auto summary = runtime.run(
         [] { return stop_requested != 0; },
-        [](const driveflow::runtime::ReceivedPacket&) {});
+        [](const driveflow::runtime::SensorSample&) {});
 
     std::cout << "runtime stopped"
               << " received=" << summary.packets_received
@@ -74,6 +74,16 @@ int main(int argc, char* argv[]) {
               << summary.pipeline_metrics.handler_failures
               << " queue_high_watermark="
               << summary.pipeline_metrics.queue_high_watermark
+              << " packets_examined="
+              << summary.sample_metrics.packets_examined
+              << " samples_decoded="
+              << summary.sample_metrics.samples_decoded
+              << " payloads_rejected="
+              << summary.sample_metrics.payloads_rejected
+              << " imu_samples=" << summary.sample_metrics.imu_samples
+              << " gnss_samples=" << summary.sample_metrics.gnss_samples
+              << " camera_meta_samples="
+              << summary.sample_metrics.camera_meta_samples
               << '\n';
   } catch (const std::exception& error) {
     std::cerr << "runtime failed: " << error.what() << '\n';

@@ -2,6 +2,7 @@
 
 #include "driveflow/runtime/epoll_receiver.hpp"
 #include "driveflow/runtime/runtime_config.hpp"
+#include "driveflow/runtime/sensor_sample_processor.hpp"
 #include "driveflow/runtime/worker_pipeline.hpp"
 
 #include <cstdint>
@@ -11,12 +12,12 @@
 namespace driveflow::runtime {
 
 using StopPredicate = std::function<bool()>;
-using PacketHandler = PacketProcessor;
 
 struct RuntimeSummary {
   std::uint64_t packets_received{};
   ReceiverMetrics receiver_metrics;
   WorkerPipelineMetrics pipeline_metrics;
+  SensorSampleProcessorMetrics sample_metrics;
 };
 
 class Runtime {
@@ -28,7 +29,7 @@ class Runtime {
 
   [[nodiscard]] std::span<const net::Ipv4Endpoint> local_endpoints() const noexcept;
   [[nodiscard]] RuntimeSummary run(StopPredicate stop_requested,
-                                   PacketHandler packet_handler);
+                                   SensorSampleHandler sample_handler);
 
  private:
   RuntimeConfig config_;
