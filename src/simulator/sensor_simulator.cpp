@@ -14,11 +14,13 @@
 #include <thread>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 namespace driveflow::simulator {
 namespace {
 
 constexpr double kMaximumRateHz = 1'000'000.0;
+constexpr auto kMaximumFaultDelay = std::chrono::milliseconds{60'000};
 
 template <typename Number>
 [[nodiscard]] bool parse_number(std::string_view text, Number& value) {
@@ -43,6 +45,13 @@ template <typename Number>
     return 10.0;
   }
   return 30.0;
+}
+
+void validate_interval(const std::optional<std::uint64_t>& interval,
+                       std::string_view name) {
+  if (interval.has_value() && *interval == 0U) {
+    throw std::invalid_argument(std::string{name} + " must be positive");
+  }
 }
 
 void validate_runtime_config(const SimulatorConfig& config) {
@@ -72,6 +81,19 @@ void validate_runtime_config(const SimulatorConfig& config) {
   if (config.sensor_type != SensorType::kCameraMeta &&
       config.camera_extra_data_bytes != 0U) {
     throw std::invalid_argument("camera extra data is only valid for CameraMeta");
+  }
+  validate_interval(config.faults.drop_every, "drop interval");
+  validate_interval(config.faults.duplicate_every, "duplicate interval");
+  validate_interval(config.faults.reorder_every, "reorder interval");
+  validate_interval(config.faults.corrupt_every, "corrupt interval");
+  if (config.faults.delay.has_value()) {
+    if (config.faults.delay->every == 0U) {
+      throw std::invalid_argument("delay interval must be positive");
+    }
+    if (config.faults.delay->duration <= std::chrono::milliseconds::zero() ||
+        config.faults.delay->duration > kMaximumFaultDelay) {
+      throw std::invalid_argument("delay must be between 1 and 60000 milliseconds");
+    }
   }
 }
 
@@ -132,6 +154,127 @@ constexpr auto kStopPollInterval = std::chrono::milliseconds{10};
   return true;
 }
 
+[[nodiscard]] bool matches_interval(
+    const std::optional<std::uint64_t>& interval,
+    std::uint64_t sequence_number) noexcept {
+  return interval.has_value() && sequence_number % *interval == 0U;
+}
+
+struct PendingPacket {
+  std::vector<std::uint8_t> bytes;
+  bool duplicate{};
+  bool corrupted{};
+  std::chrono::milliseconds delay{};
+};
+
+struct InjectionBatch {
+  std::vector<PendingPacket> packets;
+  std::uint64_t packets_dropped{};
+  std::uint64_t reorder_events{};
+};
+
+class FaultInjector {
+ public:
+  explicit FaultInjector(FaultInjectionConfig config)
+      : config_{std::move(config)} {}
+
+  [[nodiscard]] InjectionBatch process(
+      std::uint64_t sequence_number, std::vector<std::uint8_t> bytes) {
+    InjectionBatch batch;
+    if (matches_interval(config_.drop_every, sequence_number)) {
+      batch.packets_dropped = 1U;
+      return batch;
+    }
+
+    PendingPacket packet{
+        .bytes = std::move(bytes),
+        .duplicate = matches_interval(config_.duplicate_every, sequence_number),
+        .corrupted = matches_interval(config_.corrupt_every, sequence_number),
+        .delay = delay_for(sequence_number),
+    };
+    if (packet.corrupted && !packet.bytes.empty()) {
+      packet.bytes.back() ^= 0x01U;
+    }
+
+    if (has_held_packet_) {
+      batch.packets.reserve(2U);
+      batch.packets.push_back(std::move(packet));
+      batch.packets.push_back(std::move(held_packet_));
+      held_packet_ = PendingPacket{};
+      has_held_packet_ = false;
+      batch.reorder_events = 1U;
+      return batch;
+    }
+    if (matches_interval(config_.reorder_every, sequence_number)) {
+      held_packet_ = std::move(packet);
+      has_held_packet_ = true;
+      return batch;
+    }
+
+    batch.packets.push_back(std::move(packet));
+    return batch;
+  }
+
+  [[nodiscard]] InjectionBatch finish() {
+    InjectionBatch batch;
+    if (has_held_packet_) {
+      batch.packets.push_back(std::move(held_packet_));
+      held_packet_ = PendingPacket{};
+      has_held_packet_ = false;
+    }
+    return batch;
+  }
+
+ private:
+  [[nodiscard]] std::chrono::milliseconds delay_for(
+      std::uint64_t sequence_number) const noexcept {
+    if (config_.delay.has_value() &&
+        sequence_number % config_.delay->every == 0U) {
+      return config_.delay->duration;
+    }
+    return std::chrono::milliseconds::zero();
+  }
+
+  FaultInjectionConfig config_;
+  PendingPacket held_packet_;
+  bool has_held_packet_{};
+};
+
+[[nodiscard]] bool send_batch(const InjectionBatch& batch,
+                              const SimulatorConfig& config,
+                              const StopPredicate& stop_requested,
+                              const net::UdpSocket& socket,
+                              SimulationSummary& summary) {
+  for (const auto& packet : batch.packets) {
+    if (stop_requested()) {
+      return false;
+    }
+    if (packet.delay > std::chrono::milliseconds::zero()) {
+      ++summary.delayed_packets;
+      if (wait_until_or_stop(SimulationClock::now() + packet.delay,
+                             stop_requested)) {
+        return false;
+      }
+    }
+
+    socket.send_to(packet.bytes, config.destination);
+    ++summary.packets_sent;
+    if (packet.corrupted) {
+      ++summary.corrupted_packets_sent;
+    }
+    if (packet.duplicate) {
+      socket.send_to(packet.bytes, config.destination);
+      ++summary.packets_sent;
+      ++summary.duplicate_packets_sent;
+      if (packet.corrupted) {
+        ++summary.corrupted_packets_sent;
+      }
+    }
+  }
+  summary.reorder_events += batch.reorder_events;
+  return true;
+}
+
 }  // namespace
 
 ParseSimulatorConfigResult parse_simulator_config(
@@ -142,9 +285,12 @@ ParseSimulatorConfigResult parse_simulator_config(
       .rate_hz = 0.0,
       .packet_count = std::nullopt,
       .camera_extra_data_bytes = 0U,
+      .faults = {},
   };
   bool has_sensor = false;
   bool has_explicit_rate = false;
+  std::optional<std::uint64_t> delay_every;
+  std::optional<std::uint64_t> delay_ms;
   std::unordered_set<std::string_view> seen_options;
 
   for (std::size_t index = 0; index < arguments.size(); index += 2U) {
@@ -190,6 +336,43 @@ ParseSimulatorConfigResult parse_simulator_config(
       if (!parse_number(value, config.camera_extra_data_bytes)) {
         return parse_failure("camera-extra-bytes must be a non-negative integer");
       }
+    } else if (option == "--drop-every") {
+      std::uint64_t interval{};
+      if (!parse_number(value, interval) || interval == 0U) {
+        return parse_failure("drop-every must be a positive integer");
+      }
+      config.faults.drop_every = interval;
+    } else if (option == "--duplicate-every") {
+      std::uint64_t interval{};
+      if (!parse_number(value, interval) || interval == 0U) {
+        return parse_failure("duplicate-every must be a positive integer");
+      }
+      config.faults.duplicate_every = interval;
+    } else if (option == "--reorder-every") {
+      std::uint64_t interval{};
+      if (!parse_number(value, interval) || interval == 0U) {
+        return parse_failure("reorder-every must be a positive integer");
+      }
+      config.faults.reorder_every = interval;
+    } else if (option == "--delay-every") {
+      std::uint64_t interval{};
+      if (!parse_number(value, interval) || interval == 0U) {
+        return parse_failure("delay-every must be a positive integer");
+      }
+      delay_every = interval;
+    } else if (option == "--delay-ms") {
+      std::uint64_t duration_ms{};
+      if (!parse_number(value, duration_ms) || duration_ms == 0U ||
+          duration_ms > static_cast<std::uint64_t>(kMaximumFaultDelay.count())) {
+        return parse_failure("delay-ms must be an integer between 1 and 60000");
+      }
+      delay_ms = duration_ms;
+    } else if (option == "--corrupt-every") {
+      std::uint64_t interval{};
+      if (!parse_number(value, interval) || interval == 0U) {
+        return parse_failure("corrupt-every must be a positive integer");
+      }
+      config.faults.corrupt_every = interval;
     } else {
       return parse_failure("unknown option: " + std::string{option});
     }
@@ -221,6 +404,16 @@ ParseSimulatorConfigResult parse_simulator_config(
       config.camera_extra_data_bytes != 0U) {
     return parse_failure("camera-extra-bytes is only valid for the camera sensor");
   }
+  if (delay_every.has_value() != delay_ms.has_value()) {
+    return parse_failure("--delay-every and --delay-ms must be specified together");
+  }
+  if (delay_every.has_value()) {
+    config.faults.delay = PeriodicDelay{
+        .every = *delay_every,
+        .duration = std::chrono::milliseconds{
+            static_cast<std::chrono::milliseconds::rep>(*delay_ms)},
+    };
+  }
 
   return {.config = config, .error = {}};
 }
@@ -244,8 +437,14 @@ options:
   --destination <IPv4>           Destination address (default: 127.0.0.1)
   --port <port>                  Destination port (default: 9000)
   --rate-hz <frequency>          Override the sensor default rate
-  --count <packets>              Stop after this many packets (default: continuous)
+  --count <packets>              Generated packet count (default: continuous)
   --camera-extra-bytes <bytes>   Extra CameraMeta payload bytes (default: 0)
+  --drop-every <N>               Drop every Nth generated packet
+  --duplicate-every <N>          Duplicate every Nth generated packet
+  --reorder-every <N>            Send every Nth packet after its successor
+  --delay-every <N>              Delay every Nth generated packet
+  --delay-ms <milliseconds>      Delay duration; requires --delay-every
+  --corrupt-every <N>            Corrupt every Nth packet after CRC encoding
   --help                         Show this help
 )";
 }
@@ -257,31 +456,46 @@ SimulationSummary run_simulator(const SimulatorConfig& config,
     throw std::invalid_argument("stop predicate must be callable");
   }
   auto socket = net::UdpSocket::open();
+  FaultInjector injector{config.faults};
   SimulationSummary summary;
   const auto period = std::chrono::duration_cast<SimulationClock::duration>(
       std::chrono::duration<double>{1.0 / config.rate_hz});
   auto next_deadline = SimulationClock::now();
+  bool stopped = false;
 
   while (!stop_requested() &&
          (!config.packet_count.has_value() ||
-          summary.packets_sent < *config.packet_count)) {
+          summary.packets_generated < *config.packet_count)) {
+    const auto sequence_number = summary.packets_generated + 1U;
     const auto sample = make_sensor_sample(
-        config.sensor_type, summary.packets_sent + 1U, config.camera_extra_data_bytes);
+        config.sensor_type, sequence_number, config.camera_extra_data_bytes);
     const auto payload = protocol::encode_sensor_payload(sample);
     const auto timestamp_ns = current_timestamp_ns();
-    const auto packet = protocol::encode_packet(
-        protocol::message_type(sample), summary.packets_sent + 1U, timestamp_ns, payload);
-    socket.send_to(packet, config.destination);
-    ++summary.packets_sent;
+    auto packet = protocol::encode_packet(
+        protocol::message_type(sample), sequence_number, timestamp_ns, payload);
+    ++summary.packets_generated;
+
+    const auto batch = injector.process(sequence_number, std::move(packet));
+    summary.packets_dropped += batch.packets_dropped;
+    if (!send_batch(batch, config, stop_requested, socket, summary)) {
+      stopped = true;
+      break;
+    }
 
     if (config.packet_count.has_value() &&
-        summary.packets_sent == *config.packet_count) {
+        summary.packets_generated == *config.packet_count) {
       break;
     }
     next_deadline += period;
     if (wait_until_or_stop(next_deadline, stop_requested)) {
+      stopped = true;
       break;
     }
+  }
+
+  if (!stopped && !stop_requested()) {
+    const auto final_batch = injector.finish();
+    (void)send_batch(final_batch, config, stop_requested, socket, summary);
   }
   return summary;
 }

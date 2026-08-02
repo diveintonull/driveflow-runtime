@@ -59,7 +59,15 @@ int main(int argc, char* argv[]) {
     const auto summary = driveflow::simulator::run_simulator(config, [] {
       return stop_requested != 0;
     });
-    std::cout << "stopped after sending " << summary.packets_sent << " packets\n";
+    std::cout << "stopped packets_generated=" << summary.packets_generated
+              << " packets_sent=" << summary.packets_sent
+              << " packets_dropped=" << summary.packets_dropped
+              << " duplicate_packets_sent="
+              << summary.duplicate_packets_sent
+              << " reorder_events=" << summary.reorder_events
+              << " delayed_packets=" << summary.delayed_packets
+              << " corrupted_packets_sent="
+              << summary.corrupted_packets_sent << '\n';
   } catch (const std::exception& error) {
     std::cerr << "simulator failed: " << error.what() << '\n';
     return 2;

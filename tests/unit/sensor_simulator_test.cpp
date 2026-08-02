@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <thread>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -19,6 +20,72 @@
 
 namespace driveflow::simulator {
 namespace {
+
+[[nodiscard]] std::vector<net::ReceivedDatagram> receive_datagrams(
+    net::UdpSocket& receiver, std::size_t expected_count) {
+  receiver.set_non_blocking();
+  std::vector<net::ReceivedDatagram> datagrams;
+  datagrams.reserve(expected_count);
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds{500};
+  while (datagrams.size() < expected_count &&
+         std::chrono::steady_clock::now() < deadline) {
+    if (auto datagram = receiver.try_receive(); datagram.has_value()) {
+      datagrams.push_back(std::move(*datagram));
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+  }
+  return datagrams;
+}
+
+[[nodiscard]] std::vector<std::uint64_t> receive_sequence_numbers(
+    net::UdpSocket& receiver, std::size_t expected_count) {
+  const auto datagrams = receive_datagrams(receiver, expected_count);
+  std::vector<std::uint64_t> sequence_numbers;
+  sequence_numbers.reserve(datagrams.size());
+  for (const auto& datagram : datagrams) {
+    const auto decoded = protocol::decode_packet(datagram.bytes);
+    if (!decoded) {
+      ADD_FAILURE() << "packet decode failed: "
+                    << protocol::to_string(decoded.error);
+      continue;
+    }
+    sequence_numbers.push_back(decoded.packet->header.sequence_number);
+  }
+  return sequence_numbers;
+}
+
+[[nodiscard]] FaultInjectionConfig periodic_drop(std::uint64_t every) {
+  FaultInjectionConfig faults;
+  faults.drop_every = every;
+  return faults;
+}
+
+[[nodiscard]] FaultInjectionConfig periodic_duplicate(std::uint64_t every) {
+  FaultInjectionConfig faults;
+  faults.duplicate_every = every;
+  return faults;
+}
+
+[[nodiscard]] FaultInjectionConfig periodic_reorder(std::uint64_t every) {
+  FaultInjectionConfig faults;
+  faults.reorder_every = every;
+  return faults;
+}
+
+[[nodiscard]] FaultInjectionConfig periodic_delay(
+    std::uint64_t every, std::chrono::milliseconds duration) {
+  FaultInjectionConfig faults;
+  faults.delay = PeriodicDelay{.every = every, .duration = duration};
+  return faults;
+}
+
+[[nodiscard]] FaultInjectionConfig periodic_corruption(std::uint64_t every) {
+  FaultInjectionConfig faults;
+  faults.corrupt_every = every;
+  return faults;
+}
 
 TEST(SimulatorConfigTest, ParsesExplicitImuConfiguration) {
   constexpr std::array<std::string_view, 10> arguments{
@@ -36,6 +103,7 @@ TEST(SimulatorConfigTest, ParsesExplicitImuConfiguration) {
   ASSERT_TRUE(result.config->packet_count.has_value());
   EXPECT_EQ(*result.config->packet_count, 7U);
   EXPECT_EQ(result.config->camera_extra_data_bytes, 0U);
+  EXPECT_EQ(result.config->faults, FaultInjectionConfig{});
 }
 
 TEST(SimulatorConfigTest, AppliesSensorSpecificDefaults) {
@@ -71,6 +139,27 @@ TEST(SimulatorConfigTest, ParsesCameraExtraDataSize) {
   EXPECT_EQ(result.config->camera_extra_data_bytes, 1'024U);
 }
 
+TEST(SimulatorConfigTest, ParsesDeterministicFaultInjection) {
+  constexpr std::array<std::string_view, 14> arguments{
+      "--sensor",          "imu", "--drop-every",    "2",
+      "--duplicate-every", "3",   "--reorder-every", "4",
+      "--delay-every",     "5",   "--delay-ms",      "25",
+      "--corrupt-every",   "6",
+  };
+
+  const auto result = parse_simulator_config(arguments);
+
+  ASSERT_TRUE(result) << result.error;
+  EXPECT_EQ(result.config->faults.drop_every, 2U);
+  EXPECT_EQ(result.config->faults.duplicate_every, 3U);
+  EXPECT_EQ(result.config->faults.reorder_every, 4U);
+  ASSERT_TRUE(result.config->faults.delay.has_value());
+  EXPECT_EQ(result.config->faults.delay->every, 5U);
+  EXPECT_EQ(result.config->faults.delay->duration,
+            std::chrono::milliseconds{25});
+  EXPECT_EQ(result.config->faults.corrupt_every, 6U);
+}
+
 TEST(SimulatorConfigTest, RejectsInvalidConfigurations) {
   const std::vector<std::vector<std::string_view>> invalid_arguments{
       {},
@@ -87,6 +176,14 @@ TEST(SimulatorConfigTest, RejectsInvalidConfigurations) {
       {"--sensor", "imu", "--count", "0"},
       {"--sensor", "imu", "--camera-extra-bytes", "1"},
       {"--sensor", "camera", "--camera-extra-bytes", "65452"},
+      {"--sensor", "imu", "--drop-every", "0"},
+      {"--sensor", "imu", "--duplicate-every", "-1"},
+      {"--sensor", "imu", "--reorder-every", "0"},
+      {"--sensor", "imu", "--delay-every", "2"},
+      {"--sensor", "imu", "--delay-ms", "10"},
+      {"--sensor", "imu", "--delay-every", "2", "--delay-ms", "0"},
+      {"--sensor", "imu", "--delay-every", "2", "--delay-ms", "60001"},
+      {"--sensor", "imu", "--corrupt-every", "0"},
       {"--sensor", "imu", "--sensor", "gnss"},
   };
 
@@ -108,6 +205,7 @@ TEST(SensorSimulatorTest, SendsOrderedImuPacketsOverUdp) {
       .rate_hz = 1'000'000.0,
       .packet_count = 3U,
       .camera_extra_data_bytes = 0U,
+      .faults = {},
   };
 
   const auto summary = run_simulator(config, [] { return false; });
@@ -144,6 +242,7 @@ TEST(SensorSimulatorTest, SendsGnssPayloadOverUdp) {
       .rate_hz = 1'000'000.0,
       .packet_count = 1U,
       .camera_extra_data_bytes = 0U,
+      .faults = {},
   };
 
   const auto summary = run_simulator(config, [] { return false; });
@@ -171,6 +270,7 @@ TEST(SensorSimulatorTest, SendsCameraMetadataAndConfiguredExtraDataOverUdp) {
       .rate_hz = 1'000'000.0,
       .packet_count = 2U,
       .camera_extra_data_bytes = 4U,
+      .faults = {},
   };
 
   const auto summary = run_simulator(config, [] { return false; });
@@ -195,15 +295,183 @@ TEST(SensorSimulatorTest, SendsCameraMetadataAndConfiguredExtraDataOverUdp) {
   }
 }
 
-TEST(SensorSimulatorTest, RespondsToStopRequestDuringRateWait) {
+TEST(SensorSimulatorTest, DropsEveryNthGeneratedPacket) {
   auto receiver =
       net::UdpSocket::bind_to({.address = "127.0.0.1", .port = 0U});
   const SimulatorConfig config{
       .sensor_type = SensorType::kImu,
       .destination = receiver.local_endpoint(),
-      .rate_hz = 1.0,
-      .packet_count = std::nullopt,
+      .rate_hz = 1'000'000.0,
+      .packet_count = 5U,
       .camera_extra_data_bytes = 0U,
+      .faults = periodic_drop(2U),
+  };
+
+  const auto summary = run_simulator(config, [] { return false; });
+
+  EXPECT_EQ(summary.packets_generated, 5U);
+  EXPECT_EQ(summary.packets_sent, 3U);
+  EXPECT_EQ(summary.packets_dropped, 2U);
+  EXPECT_EQ(receive_sequence_numbers(receiver, 3U),
+            (std::vector<std::uint64_t>{1U, 3U, 5U}));
+}
+
+TEST(SensorSimulatorTest, DuplicatesEveryNthGeneratedPacket) {
+  auto receiver =
+      net::UdpSocket::bind_to({.address = "127.0.0.1", .port = 0U});
+  const SimulatorConfig config{
+      .sensor_type = SensorType::kImu,
+      .destination = receiver.local_endpoint(),
+      .rate_hz = 1'000'000.0,
+      .packet_count = 4U,
+      .camera_extra_data_bytes = 0U,
+      .faults = periodic_duplicate(2U),
+  };
+
+  const auto summary = run_simulator(config, [] { return false; });
+
+  EXPECT_EQ(summary.packets_generated, 4U);
+  EXPECT_EQ(summary.packets_sent, 6U);
+  EXPECT_EQ(summary.duplicate_packets_sent, 2U);
+  EXPECT_EQ(receive_sequence_numbers(receiver, 6U),
+            (std::vector<std::uint64_t>{1U, 2U, 2U, 3U, 4U, 4U}));
+}
+
+TEST(SensorSimulatorTest, ReordersEveryNthPacketWithTheNextSendablePacket) {
+  auto receiver =
+      net::UdpSocket::bind_to({.address = "127.0.0.1", .port = 0U});
+  const SimulatorConfig config{
+      .sensor_type = SensorType::kImu,
+      .destination = receiver.local_endpoint(),
+      .rate_hz = 1'000'000.0,
+      .packet_count = 5U,
+      .camera_extra_data_bytes = 0U,
+      .faults = periodic_reorder(2U),
+  };
+
+  const auto summary = run_simulator(config, [] { return false; });
+
+  EXPECT_EQ(summary.packets_generated, 5U);
+  EXPECT_EQ(summary.packets_sent, 5U);
+  EXPECT_EQ(summary.reorder_events, 2U);
+  EXPECT_EQ(receive_sequence_numbers(receiver, 5U),
+            (std::vector<std::uint64_t>{1U, 3U, 2U, 5U, 4U}));
+}
+
+TEST(SensorSimulatorTest, FlushesAnUnpairedReorderPacketAtFiniteRunEnd) {
+  auto receiver =
+      net::UdpSocket::bind_to({.address = "127.0.0.1", .port = 0U});
+  const SimulatorConfig config{
+      .sensor_type = SensorType::kImu,
+      .destination = receiver.local_endpoint(),
+      .rate_hz = 1'000'000.0,
+      .packet_count = 2U,
+      .camera_extra_data_bytes = 0U,
+      .faults = periodic_reorder(2U),
+  };
+
+  const auto summary = run_simulator(config, [] { return false; });
+
+  EXPECT_EQ(summary.packets_sent, 2U);
+  EXPECT_EQ(summary.reorder_events, 0U);
+  EXPECT_EQ(receive_sequence_numbers(receiver, 2U),
+            (std::vector<std::uint64_t>{1U, 2U}));
+}
+
+TEST(SensorSimulatorTest, DelaysEveryNthGeneratedPacket) {
+  auto receiver =
+      net::UdpSocket::bind_to({.address = "127.0.0.1", .port = 0U});
+  const SimulatorConfig config{
+      .sensor_type = SensorType::kImu,
+      .destination = receiver.local_endpoint(),
+      .rate_hz = 1'000'000.0,
+      .packet_count = 2U,
+      .camera_extra_data_bytes = 0U,
+      .faults = periodic_delay(2U, std::chrono::milliseconds{20}),
+  };
+
+  const auto started_at = std::chrono::steady_clock::now();
+  const auto summary = run_simulator(config, [] { return false; });
+  const auto elapsed = std::chrono::steady_clock::now() - started_at;
+
+  EXPECT_EQ(summary.packets_generated, 2U);
+  EXPECT_EQ(summary.packets_sent, 2U);
+  EXPECT_EQ(summary.delayed_packets, 1U);
+  EXPECT_GE(elapsed, std::chrono::milliseconds{15});
+  EXPECT_EQ(receive_sequence_numbers(receiver, 2U),
+            (std::vector<std::uint64_t>{1U, 2U}));
+}
+
+TEST(SensorSimulatorTest, CorruptsPacketBytesAfterCrcEncoding) {
+  auto receiver =
+      net::UdpSocket::bind_to({.address = "127.0.0.1", .port = 0U});
+  const SimulatorConfig config{
+      .sensor_type = SensorType::kImu,
+      .destination = receiver.local_endpoint(),
+      .rate_hz = 1'000'000.0,
+      .packet_count = 3U,
+      .camera_extra_data_bytes = 0U,
+      .faults = periodic_corruption(2U),
+  };
+
+  const auto summary = run_simulator(config, [] { return false; });
+  const auto datagrams = receive_datagrams(receiver, 3U);
+
+  ASSERT_EQ(datagrams.size(), 3U);
+  EXPECT_TRUE(protocol::decode_packet(datagrams[0].bytes));
+  const auto corrupted = protocol::decode_packet(datagrams[1].bytes);
+  EXPECT_FALSE(corrupted);
+  EXPECT_EQ(corrupted.error, protocol::DecodeError::kCrcMismatch);
+  EXPECT_TRUE(protocol::decode_packet(datagrams[2].bytes));
+  EXPECT_EQ(summary.packets_generated, 3U);
+  EXPECT_EQ(summary.packets_sent, 3U);
+  EXPECT_EQ(summary.corrupted_packets_sent, 1U);
+}
+
+TEST(SensorSimulatorTest, DropTakesPriorityOverAllOtherFaults) {
+  auto receiver =
+      net::UdpSocket::bind_to({.address = "127.0.0.1", .port = 0U});
+  const SimulatorConfig config{
+      .sensor_type = SensorType::kImu,
+      .destination = receiver.local_endpoint(),
+      .rate_hz = 1'000'000.0,
+      .packet_count = 2U,
+      .camera_extra_data_bytes = 0U,
+      .faults = {
+          .drop_every = 2U,
+          .duplicate_every = 2U,
+          .reorder_every = 2U,
+          .delay = PeriodicDelay{
+              .every = 2U,
+              .duration = std::chrono::milliseconds{20},
+          },
+          .corrupt_every = 2U,
+      },
+  };
+
+  const auto summary = run_simulator(config, [] { return false; });
+
+  EXPECT_EQ(summary.packets_generated, 2U);
+  EXPECT_EQ(summary.packets_sent, 1U);
+  EXPECT_EQ(summary.packets_dropped, 1U);
+  EXPECT_EQ(summary.duplicate_packets_sent, 0U);
+  EXPECT_EQ(summary.reorder_events, 0U);
+  EXPECT_EQ(summary.delayed_packets, 0U);
+  EXPECT_EQ(summary.corrupted_packets_sent, 0U);
+  EXPECT_EQ(receive_sequence_numbers(receiver, 1U),
+            (std::vector<std::uint64_t>{1U}));
+}
+
+TEST(SensorSimulatorTest, RespondsToStopRequestDuringInjectedDelay) {
+  auto receiver =
+      net::UdpSocket::bind_to({.address = "127.0.0.1", .port = 0U});
+  const SimulatorConfig config{
+      .sensor_type = SensorType::kImu,
+      .destination = receiver.local_endpoint(),
+      .rate_hz = 1'000'000.0,
+      .packet_count = 1U,
+      .camera_extra_data_bytes = 0U,
+      .faults = periodic_delay(1U, std::chrono::milliseconds{1'000}),
   };
 
   std::atomic_bool stop_requested{false};
@@ -218,6 +486,37 @@ TEST(SensorSimulatorTest, RespondsToStopRequestDuringRateWait) {
   });
   const auto elapsed = std::chrono::steady_clock::now() - started_at;
 
+  EXPECT_EQ(summary.packets_generated, 1U);
+  EXPECT_EQ(summary.packets_sent, 0U);
+  EXPECT_EQ(summary.delayed_packets, 1U);
+  EXPECT_LT(elapsed, std::chrono::milliseconds{250});
+}
+
+TEST(SensorSimulatorTest, RespondsToStopRequestDuringRateWait) {
+  auto receiver =
+      net::UdpSocket::bind_to({.address = "127.0.0.1", .port = 0U});
+  const SimulatorConfig config{
+      .sensor_type = SensorType::kImu,
+      .destination = receiver.local_endpoint(),
+      .rate_hz = 1.0,
+      .packet_count = std::nullopt,
+      .camera_extra_data_bytes = 0U,
+      .faults = {},
+  };
+
+  std::atomic_bool stop_requested{false};
+  std::jthread stopper{[&] {
+    std::this_thread::sleep_for(std::chrono::milliseconds{30});
+    stop_requested.store(true, std::memory_order_relaxed);
+  }};
+
+  const auto started_at = std::chrono::steady_clock::now();
+  const auto summary = run_simulator(config, [&] {
+    return stop_requested.load(std::memory_order_relaxed);
+  });
+  const auto elapsed = std::chrono::steady_clock::now() - started_at;
+
+  EXPECT_EQ(summary.packets_generated, 1U);
   EXPECT_EQ(summary.packets_sent, 1U);
   EXPECT_LT(elapsed, std::chrono::milliseconds{250});
 }
@@ -230,6 +529,12 @@ TEST(SimulatorCliTest, ExposesUsageAndStableSensorNames) {
   EXPECT_NE(usage.find("--sensor <imu|gnss|camera>"), std::string_view::npos);
   EXPECT_NE(usage.find("--camera-extra-bytes <bytes>"), std::string_view::npos);
   EXPECT_NE(usage.find("--count <packets>"), std::string_view::npos);
+  EXPECT_NE(usage.find("--drop-every <N>"), std::string_view::npos);
+  EXPECT_NE(usage.find("--duplicate-every <N>"), std::string_view::npos);
+  EXPECT_NE(usage.find("--reorder-every <N>"), std::string_view::npos);
+  EXPECT_NE(usage.find("--delay-every <N>"), std::string_view::npos);
+  EXPECT_NE(usage.find("--delay-ms <milliseconds>"), std::string_view::npos);
+  EXPECT_NE(usage.find("--corrupt-every <N>"), std::string_view::npos);
 }
 
 TEST(SensorSimulatorTest, RejectsInvalidDirectConfiguration) {
@@ -241,8 +546,44 @@ TEST(SensorSimulatorTest, RejectsInvalidDirectConfiguration) {
       .rate_hz = 0.0,
       .packet_count = 1U,
       .camera_extra_data_bytes = 0U,
+      .faults = {},
   };
 
+  EXPECT_THROW(
+      (void)run_simulator(config, [] { return false; }),
+      std::invalid_argument);
+}
+
+TEST(SensorSimulatorTest, RejectsInvalidDirectFaultConfiguration) {
+  auto receiver =
+      net::UdpSocket::bind_to({.address = "127.0.0.1", .port = 0U});
+  SimulatorConfig config{
+      .sensor_type = SensorType::kImu,
+      .destination = receiver.local_endpoint(),
+      .rate_hz = 1'000'000.0,
+      .packet_count = 1U,
+      .camera_extra_data_bytes = 0U,
+      .faults = {},
+  };
+
+  config.faults.drop_every = 0U;
+  EXPECT_THROW(
+      (void)run_simulator(config, [] { return false; }),
+      std::invalid_argument);
+
+  config.faults = {};
+  config.faults.delay = PeriodicDelay{
+      .every = 0U,
+      .duration = std::chrono::milliseconds{1},
+  };
+  EXPECT_THROW(
+      (void)run_simulator(config, [] { return false; }),
+      std::invalid_argument);
+
+  config.faults.delay = PeriodicDelay{
+      .every = 1U,
+      .duration = std::chrono::milliseconds{60'001},
+  };
   EXPECT_THROW(
       (void)run_simulator(config, [] { return false; }),
       std::invalid_argument);

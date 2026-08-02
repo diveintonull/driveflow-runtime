@@ -40,6 +40,10 @@ The checksum is CRC-32/ISO-HDLC (the common reflected CRC-32 with polynomial `0x
 state `0xffffffff`, and final XOR `0xffffffff`). It covers header bytes `[0, 28)` followed by the
 payload. The four-byte `crc32` field itself is excluded.
 
+The Sensor Simulator's `--corrupt-every` option deliberately flips a packet bit
+after this CRC has been encoded. It provides repeatable `kCrcMismatch` input
+without weakening the normal encoder.
+
 ## Decoder behavior
 
 The decoder accepts untrusted bytes and returns a specific error instead of throwing for malformed

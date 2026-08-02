@@ -219,6 +219,36 @@ counter.
 currently exposes aggregate stream metrics; the per-packet observation returned
 by `observe()` is not added to `SensorSampleHandler` yet.
 
+## Reproducible simulator input
+
+The Sensor Simulator can now generate deterministic sequence behavior through
+`--drop-every`, `--duplicate-every`, and `--reorder-every`. For example, its
+documented eight-packet demonstration emits:
+
+```text
+1, 3, 3, 2, 6, 6, 4, 7, 8
+```
+
+The corresponding tracker metrics are:
+
+```text
+first_observations=1
+in_order_observations=2
+gap_observations=2
+duplicate_observations=2
+reordered_observations=2
+missing_samples_inferred=3
+```
+
+`--corrupt-every` is intentionally different: it changes packet bytes after
+CRC encoding. Those datagrams are rejected by `EpollReceiver` and therefore do
+not appear in `packets_observed`. This makes it possible to demonstrate the
+separation between malformed transport input and valid packets with unusual
+sequence behavior.
+
+See [Sensor simulator](simulator.md#end-to-end-stream-tracker-demonstration) for
+the complete two-terminal commands and expected output.
+
 ## Scope boundaries
 
 The tracker deliberately does not provide:
